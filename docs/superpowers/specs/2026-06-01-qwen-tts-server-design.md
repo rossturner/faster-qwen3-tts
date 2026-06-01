@@ -66,9 +66,13 @@ Request JSON:
   "model": "<ignored>", "speed": 1.0, "temperature": null }
 ```
 - `input` (required), `voice` (required, one of the 14 ids).
-- `response_format`: `wav` (default). `pcm` optional. `model`/`speed` accepted for OpenAI
-  compatibility but ignored (`speed` may be applied later). `temperature` optional override;
-  default is the per-voice value (0.7).
+- `response_format`: **`wav` only** (the single format media-worker needs); any other value → `400`.
+  `model`/`speed` accepted for OpenAI compatibility but ignored. `temperature` optional override;
+  default is the per-voice value (0.7) — passed explicitly, since the fork's own default is 0.9.
+- **Input bounds:** generation is capped by `max_new_tokens` (≈ a few seconds of headroom over
+  media-worker's 38 s reject threshold) so a runaway/looping decode can't tie up the GPU. Input that
+  would exceed the model's `max_seq_len` (2048 tokens) is rejected with `400` rather than silently
+  truncated; media-worker already chunks text upstream, so this is a guard, not a normal path.
 
 Response: `200`, `Content-Type: audio/wav`, body = **one complete WAV file** — 24 kHz mono 16-bit
 PCM with a valid RIFF/`fmt `/`data` header and correct data length (media-worker parses the header
@@ -114,19 +118,27 @@ faster_qwen3_tts/server_voices/
 The reference line per language (the `ref_text` used for cloning) and the persona prompts are as
 recorded in `voice-mapping.md`.
 
-**Reproducibility:** the generation scripts are committed alongside —
-`design_audition_library.py` (the 10 designed refs), `redo_ja_female.py` (the `ja_f` re-roll),
-`gen_voice_samples.py` (the aiden/sohee CustomVoice renders), and a small new script that produces
-`aiden_ref.wav` / `sohee_ref.wav` for the builtin-clone voices.
+**Reproducibility (important nuance):** the committed `refs/*.wav` **binaries are the canonical
+artifacts**. Generation is stochastic and no seed is exposed, so re-running a script produces a
+*different* voice, not the same clip — the scripts reproduce the **method**, not the exact byte
+output. The provenance README states this explicitly so nobody "regenerates" a ref and silently
+changes a shipped voice. Committed alongside: `design_audition_library.py` (the 10 designed refs),
+`redo_ja_female.py` (the `ja_f` re-roll), `gen_voice_samples.py` (the aiden/sohee CustomVoice
+renders), and a small new script that produces `aiden_ref.wav` / `sohee_ref.wav` for the
+builtin-clone voices.
 
 ## 6. Model loading & warmup
 
-On startup the server:
+Warmup runs as a **background task started at app startup** (the app accepts connections
+immediately so `/health` can answer `503` while warming, rather than refusing connections). A
+`ready` flag is flipped only at the end. Steps:
 1. Loads **CustomVoice** and **Base** (both 1.7B, bf16, `attn_implementation="sdpa"`).
-2. Pre-bakes the clone prompts for all `clone` voices from `refs/` (skips per-request extraction),
-   using the fork's voice-clone-prompt API (see `tests/test_voice_clone_prompt_api.py`).
+2. Pre-bakes the clone prompts for all `clone` voices from `refs/`, skipping per-request extraction.
+   Confirmed feasible: `create_voice_clone_prompt(ref_audio, ref_text)` returns prompt items
+   (`ref_code` + `ref_spk_embedding` + mode flags) that `generate_voice_clone(voice_clone_prompt=…)`
+   accepts directly (see `examples/extract_speaker.py`, `tests/test_voice_clone_prompt_api.py`).
 3. Warms up both models (triggers CUDA-graph capture) with a short dummy generate each.
-4. Flips `/health` to ready.
+4. Flips `ready` → `/health` returns `200`.
 
 **De-risking spike (do first):** confirm two graph-captured `FasterQwen3TTS` instances
 (CustomVoice + Base) coexist on one 24 GB GPU. Prior usage only ever loaded them sequentially. If
@@ -136,9 +148,10 @@ already prove this path) and drop CustomVoice. Peak VRAM target: well under 24 G
 ## 7. Server internals
 
 - FastAPI + uvicorn, **single process / single worker** (one GPU).
-- A global lock serializes GPU inference; generation runs in a threadpool executor so the event loop
-  is not blocked, but only one inference proceeds at a time (matches media-worker's per-engine
-  resource lock).
+- All GPU work runs on **one dedicated worker thread** (a single-thread executor), not the default
+  threadpool — so CUDA-graph replay always happens on the same thread the graphs were captured on,
+  and inference is inherently serialized (matches media-worker's per-engine resource lock). The
+  event loop stays free, so `/health` and queued requests remain responsive during a generation.
 - Routing by voice `type`:
   - `custom` → `generate_custom_voice(text, speaker, language, instruct, temperature)`
   - `clone`  → `generate_voice_clone(text, language, voice_clone_prompt=<prebaked>, ref_text,
@@ -156,7 +169,9 @@ already prove this path) and drop CustomVoice. Peak VRAM target: well under 24 G
 ## 9. Docker image (shipped deliverable)
 
 - CUDA-capable Python base; install torch (cu130 wheels) + `faster-qwen3-tts[demo]`; bundle the
-  package incl. `server_voices/` (code + registry + ref clips).
+  package incl. `server_voices/` (code + registry + ref clips). The **host needs a CUDA-13-capable
+  NVIDIA driver** for the cu130 wheels; exact base image (e.g. `nvidia/cuda:13.x-runtime` vs slim +
+  wheel-bundled CUDA libs) is a plan decision.
 - **Models via mounted HF cache volume** → `HF_HOME` (e.g. `/hf-cache`), pre-populated once from the
   host's existing `~/.cache/huggingface`. Documented populate step.
 - GPU via nvidia-container-toolkit (compose `deploy.resources.reservations.devices` / `--gpus all`).
@@ -179,12 +194,16 @@ already prove this path) and drop CustomVoice. Peak VRAM target: well under 24 G
 ## 11. Risks & open items
 
 - **Two-model coexistence** (see §6 spike) — primary technical risk; Base-only fallback defined.
-- **Cold-start latency** — first graph capture ~47 s; mitigated by warmup-gated health + Docker
-  `start_period`. Server must never be marked healthy mid-warmup.
+- **Cold-start latency** — first graph capture ~47 s; mitigated by background warmup + warmup-gated
+  health + Docker `start_period`. Server must never be marked healthy mid-warmup.
+- **Runaway generation** — bounded by the `max_new_tokens` cap (§4); without it a looping decode
+  could occupy the GPU and block the serialized queue.
 - **`aiden`/`sohee` clone quality** — the `*_clone` voices are for comparison; if they match the
   presets closely, a future simplification to Base-only becomes viable.
 - **Read timeout** — media-worker's MeloTTS client has no read timeout; the handoff notes adding one
   for the Qwen client so a hung generate cannot block a worker thread indefinitely.
+
+Clone-prompt pre-baking (previously a risk) is **resolved** — confirmed supported in the fork (§6).
 
 ## 12. Handoff appendix — media-worker Java integration (not built here)
 
