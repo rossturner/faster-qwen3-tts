@@ -81,21 +81,22 @@ class ModelManager:
         threading.Thread(target=lambda: self._run(self._load_and_warm),
                          name="tts-warmup", daemon=True).start()
 
-    def _synthesize_blocking(self, cfg: VoiceConfig, text: str, temperature: float):
+    def _synthesize_blocking(self, cfg: VoiceConfig, text: str, temperature: float, max_new_tokens: int):
         if cfg.type == "custom":
             wavs, _ = self._custom.generate_custom_voice(
                 text=text, speaker=cfg.speaker, language=cfg.language,
                 instruct=cfg.instruct, temperature=temperature,
-                max_new_tokens=self.max_new_tokens)
+                max_new_tokens=max_new_tokens)
         else:
             wavs, _ = self._base.generate_voice_clone(
                 text=text, language=cfg.language,
                 voice_clone_prompt=self._clone_prompts[cfg.id], ref_text=cfg.ref_text,
-                xvec_only=False, temperature=temperature, max_new_tokens=self.max_new_tokens)
+                xvec_only=False, temperature=temperature, max_new_tokens=max_new_tokens)
         return np.asarray(wavs[0], dtype=np.float32)
 
     def synthesize(self, cfg: VoiceConfig, text: str, temperature: float, max_new_tokens=None):
-        return self._run(self._synthesize_blocking, cfg, text, temperature)
+        tokens = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
+        return self._run(self._synthesize_blocking, cfg, text, temperature, tokens)
 
 
 def build_app(manager, registry: Registry) -> FastAPI:
@@ -123,7 +124,7 @@ def build_app(manager, registry: Registry) -> FastAPI:
         except KeyError as e:
             raise HTTPException(400, str(e))
         temp = req.temperature if req.temperature is not None else cfg.temperature
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         pcm = await loop.run_in_executor(None, manager.synthesize, cfg, text, temp)
         return Response(content=to_wav_bytes(pcm, manager.sample_rate), media_type="audio/wav")
 
