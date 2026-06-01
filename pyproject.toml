@@ -41,6 +41,14 @@ demo = [
     "uvicorn[standard]>=0.24.0",
     "python-multipart>=0.0.7",
 ]
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.24.0",
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools.package-data]
+faster_qwen3_tts = ["server_voices/*.yaml", "server_voices/*.md", "server_voices/refs/*.wav"]
 
 [project.scripts]
 faster-qwen3-tts = "faster_qwen3_tts.cli:main"

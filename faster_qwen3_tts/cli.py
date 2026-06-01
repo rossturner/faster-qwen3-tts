@@ -305,6 +305,14 @@ def cmd_serve(args):
         print(f"Wrote {out_path} (dur {audio_dur:.2f}s, RTF {rtf:.2f})")
 
 
+def cmd_serve_http(args):
+    import uvicorn
+    from faster_qwen3_tts.server import create_app, DEFAULT_VOICES
+    app = create_app(voices_path=args.voices or DEFAULT_VOICES, device=args.device,
+                     max_new_tokens=args.max_new_tokens, warmup=True)
+    uvicorn.run(app, host=args.host, port=args.port)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="faster-qwen3-tts", description="FasterQwen3TTS CLI")
     p.add_argument("--device", default="cuda", help="Device (cuda or cpu)")
@@ -393,6 +401,14 @@ def build_parser():
     sp.add_argument("--greedy", action="store_true", help="Disable sampling")
     sp.add_argument("--output-dir", default="outputs", help="Directory for output wavs")
     sp.set_defaults(fn=cmd_serve)
+
+    sp = sub.add_parser("serve-http", help="OpenAI-compatible HTTP server for the 14 production voices")
+    sp.add_argument("--host", default="0.0.0.0")
+    sp.add_argument("--port", type=int, default=8092)
+    sp.add_argument("--voices", default=None, help="Path to voices.yaml (default: bundled)")
+    sp.add_argument("--device", default="cuda")
+    sp.add_argument("--max-new-tokens", type=int, default=1024)
+    sp.set_defaults(fn=cmd_serve_http)
 
     return p
 
