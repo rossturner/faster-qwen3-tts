@@ -6,3 +6,9 @@ sample_*.wav
 __pycache__/
 *.pyc
 .venv/
+
+# Versioned production voice assets (override the *.wav / *.json globals above)
+!faster_qwen3_tts/server_voices/
+!faster_qwen3_tts/server_voices/refs/
+!faster_qwen3_tts/server_voices/refs/*.wav
+!faster_qwen3_tts/server_voices/*.yaml
