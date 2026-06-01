@@ -1,0 +1,20 @@
+# docker-compose.example.yml — snippet for media-worker's docker-compose
+services:
+  qwen-tts:
+    build: .
+    ports: ["8092:8092"]
+    volumes:
+      - ${HOME}/.cache/huggingface:/hf-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8092/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+      retries: 3

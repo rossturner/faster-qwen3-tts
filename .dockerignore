@@ -1,0 +1,10 @@
+.venv/
+voice_samples/
+voice_design_audition/
+bench_out/
+tests/
+docs/
+*.html
+.git/
+__pycache__/
+spikes/
