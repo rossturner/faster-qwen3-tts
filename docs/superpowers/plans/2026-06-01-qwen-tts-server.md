@@ -723,7 +723,6 @@ And register the subparser inside `build_parser()` (next to the existing `serve`
     sp.add_argument("--host", default="0.0.0.0")
     sp.add_argument("--port", type=int, default=8092)
     sp.add_argument("--voices", default=None, help="Path to voices.yaml (default: bundled)")
-    sp.add_argument("--device", default="cuda")
     sp.add_argument("--max-new-tokens", type=int, default=1024)
     sp.set_defaults(fn=cmd_serve_http)
 ```
