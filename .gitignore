@@ -12,3 +12,8 @@ __pycache__/
 !faster_qwen3_tts/server_voices/refs/
 !faster_qwen3_tts/server_voices/refs/*.wav
 !faster_qwen3_tts/server_voices/*.yaml
+
+# Build artifacts (regenerable)
+build/
+*.egg-info/
+.idea/
