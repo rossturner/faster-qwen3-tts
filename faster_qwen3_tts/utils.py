@@ -15,6 +15,9 @@ class _FilteredStdout:
     def flush(self):
         return self._stream.flush()
 
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
 
 @contextlib.contextmanager
 def suppress_flash_attn_warning():
