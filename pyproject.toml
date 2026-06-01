@@ -56,3 +56,7 @@ faster-qwen3-tts = "faster_qwen3_tts.cli:main"
 [project.urls]
 Homepage = "https://github.com/andimarafioti/faster-qwen3-tts"
 Repository = "https://github.com/andimarafioti/faster-qwen3-tts"
+
+[tool.pytest.ini_options]
+markers = ["gpu: tests that load real models on a CUDA GPU (opt-in, slow)"]
+addopts = "-m 'not gpu'"
