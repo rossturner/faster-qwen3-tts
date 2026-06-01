@@ -1,0 +1,65 @@
+{
+  "planPath": "docs/superpowers/plans/2026-06-01-qwen-tts-server.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Two-model coexistence spike",
+      "status": "pending",
+      "description": "**Goal:** Prove CustomVoice + Base coexist on one GPU; record decision; Base-only fallback if it fails.\n\n```json:metadata\n{\"files\": [\"spikes/two_model_coexistence.py\", \"docs/superpowers/specs/2026-06-01-coexistence-spike-result.md\"], \"verifyCommand\": \".venv/bin/python spikes/two_model_coexistence.py\", \"acceptanceCriteria\": [\"both models load + generate\", \"peak VRAM recorded\", \"decision recorded\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Versioned voice registry data + ref clips + provenance",
+      "status": "pending",
+      "description": "**Goal:** Assemble server_voices/ (12 refs, voices.yaml, README); commit generation scripts; .gitignore negations.\n\n```json:metadata\n{\"files\": [\"faster_qwen3_tts/server_voices/voices.yaml\", \"faster_qwen3_tts/server_voices/refs\", \"faster_qwen3_tts/server_voices/README.md\", \"scripts/make_builtin_clone_refs.py\", \".gitignore\"], \"verifyCommand\": \".venv/bin/python -c \\\"import yaml; assert len(yaml.safe_load(open('faster_qwen3_tts/server_voices/voices.yaml'))['voices'])==14\\\"\", \"acceptanceCriteria\": [\"12 ref clips\", \"14 voices in yaml\", \"wavs/yaml tracked\", \"provenance README\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: WAV encoding module",
+      "status": "pending",
+      "description": "**Goal:** GPU-free float32 -> complete 16-bit WAV bytes.\n\n```json:metadata\n{\"files\": [\"faster_qwen3_tts/wav_io.py\", \"tests/test_wav_io.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_wav_io.py -v\", \"acceptanceCriteria\": [\"valid WAV\", \"correct sr/mono/16-bit/frames\", \"clips range\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Voice registry loader",
+      "status": "pending",
+      "blockedBy": [1],
+      "description": "**Goal:** Load voices.yaml -> validated VoiceConfig; resolve ref paths; reject malformed/unknown.\n\n```json:metadata\n{\"files\": [\"faster_qwen3_tts/voice_registry.py\", \"tests/test_voice_registry.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_voice_registry.py -v\", \"acceptanceCriteria\": [\"loads 14 voices\", \"unknown KeyError\", \"clone needs ref_text\", \"custom needs speaker\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: FastAPI server (model manager + endpoints)",
+      "status": "pending",
+      "blockedBy": [2, 3],
+      "description": "**Goal:** ModelManager (dual-model, prebake, background warmup, single-thread GPU) + FastAPI (/health gated, /v1/audio/speech wav-only). Mocked tests.\n\n```json:metadata\n{\"files\": [\"faster_qwen3_tts/server.py\", \"tests/test_server.py\"], \"verifyCommand\": \".venv/bin/pytest tests/test_server.py -v\", \"acceptanceCriteria\": [\"health 503/200\", \"empty input 400\", \"unknown voice 400\", \"non-wav 400\", \"valid audio/wav\", \"custom vs clone routing\"]}\n```"
+    },
+    {
+      "id": 5,
+      "subject": "Task 5: serve-http CLI command + packaging",
+      "status": "pending",
+      "blockedBy": [4],
+      "description": "**Goal:** `faster-qwen3-tts serve-http` command; package server_voices data; `server` extra.\n\n```json:metadata\n{\"files\": [\"faster_qwen3_tts/cli.py\", \"pyproject.toml\"], \"verifyCommand\": \".venv/bin/faster-qwen3-tts serve-http --help\", \"acceptanceCriteria\": [\"serve-http subcommand\", \"package-data voices+refs\", \"server extra\"]}\n```"
+    },
+    {
+      "id": 6,
+      "subject": "Task 6: Opt-in GPU smoke test",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**Goal:** Opt-in pytest (gpu marker) generating one clip per voice; excluded from default runs.\n\n```json:metadata\n{\"files\": [\"tests/test_server_gpu.py\", \"pyproject.toml\"], \"verifyCommand\": \".venv/bin/pytest tests/test_server_gpu.py -v\", \"acceptanceCriteria\": [\"marked gpu, deselected default\", \"each voice valid WAV when run\"]}\n```"
+    },
+    {
+      "id": 7,
+      "subject": "Task 7: Docker image + compose example",
+      "status": "pending",
+      "blockedBy": [5],
+      "description": "**Goal:** GPU Docker image running serve-http, mounted HF cache volume, warmup-gated healthcheck; compose snippet.\n\n```json:metadata\n{\"files\": [\"Dockerfile\", \".dockerignore\", \"docker-compose.example.yml\"], \"verifyCommand\": \"docker build -t qwen-tts .\", \"acceptanceCriteria\": [\"image builds with server_voices\", \"GPU + HF volume + port 8092\", \"healthcheck start_period\", \"smoke run WAV\"]}\n```"
+    },
+    {
+      "id": 8,
+      "subject": "Task 8: media-worker integration handoff doc",
+      "status": "pending",
+      "description": "**Goal:** Standalone Java handoff doc from spec section 12: contract, voice ids, (Language,Gender)->id mapping, change list, Korean-first rollout.\n\n```json:metadata\n{\"files\": [\"docs/media-worker-qwen-integration.md\"], \"verifyCommand\": \"test -f docs/media-worker-qwen-integration.md\", \"acceptanceCriteria\": [\"contract\", \"voice-id mapping table\", \"Java change list\", \"Korean-first rollout\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-06-01"
+}
