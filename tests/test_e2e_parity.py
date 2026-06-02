@@ -683,8 +683,10 @@ class TestBF16Parity:
             repetition_penalty=1.0,
         )
 
+        # ICL conditions on the reference audio and legitimately runs to the budget
+        # without a natural EOS (see _assert_icl_codes_match), so don't require one.
         _assert_codec_output_valid(fast_codes, config, _MAX_NEW_TOKENS, label="icl/bf16",
-                                   check_natural_eos=True)
+                                   check_natural_eos=False)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required.")
     def test_streaming_bf16_produces_valid_chunks(self, parity_fixture):

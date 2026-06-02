@@ -1,5 +1,9 @@
 # faster_qwen3_tts/server.py
-"""OpenAI-compatible Qwen3-TTS server: 14 voices, dual-model, warmup-gated health."""
+"""OpenAI-compatible Qwen3-TTS server: registry-driven voices, warmup-gated health.
+
+Loads Base (1.7B) always; loads CustomVoice only if the registry has a `type: custom`
+voice. The shipped registry is all clones, so the server runs Base-only.
+"""
 from __future__ import annotations
 import asyncio, logging, threading
 from concurrent.futures import ThreadPoolExecutor

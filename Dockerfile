@@ -10,6 +10,6 @@ RUN python3.12 -m pip install --break-system-packages \
         torch==2.12.0 --index-url https://download.pytorch.org/whl/cu130 && \
     python3.12 -m pip install --break-system-packages ".[server]"
 EXPOSE 8092
-HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
     CMD curl -f http://localhost:8092/health || exit 1
 CMD ["faster-qwen3-tts", "serve-http", "--host", "0.0.0.0", "--port", "8092"]

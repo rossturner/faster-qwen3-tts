@@ -4,6 +4,14 @@
 - **Status:** Approved (brainstorming) — ready for implementation planning
 - **Repo:** `faster-qwen3-tts` (this repo). Consumer: `media-worker` (separate repo, Java/Spring).
 
+> **Update (2026-06-02):** the two CustomVoice slots (`en_m`=aiden, `ko_f`=sohee) were replaced by
+> VoiceDesign→clone voices (`en_m_friendly_casual`, `ko_f_friendly_casual`). The registry is now **12
+> voices, all `type: clone`**; the two `*_clone` comparison voices were dropped. With no `type: custom`
+> entries, the server loads **Base only** (the registry-driven CustomVoice load path is retained but
+> inert). Voice ids are unchanged, so the HTTP contract and media-worker integration are unaffected.
+> The §3 table and "14 voices" counts below describe the original design; see `voice-mapping.md` and
+> `faster_qwen3_tts/server_voices/README.md` for the current 12-voice registry.
+
 ## 1. Context & motivation
 
 `media-worker` dubs video and currently synthesizes Korean speech with **MeloTTS**, which has no

@@ -30,7 +30,7 @@ Request body (JSON):
 | Field | Required | Notes |
 | --- | --- | --- |
 | `input` | yes | Text to synthesize. Must be non-empty (after trim) and ≤ **2000 characters**. |
-| `voice` | yes | One of the 14 voice ids in §2. |
+| `voice` | yes | One of the 12 voice ids in §2. |
 | `response_format` | no (default `"wav"`) | **`wav` only.** Any other value → `400`. |
 | `temperature` | no (default `null`) | Optional override. When omitted, the server uses the per-voice default (`0.7`). |
 | `model` | no | Accepted for OpenAI compatibility, **ignored**. |
@@ -84,17 +84,17 @@ curl -f http://qwen-tts:8092/health
 
 ---
 
-## 2. The 14 voice ids
+## 2. The 12 voice ids
 
 Voice ids are `<lang>_<gender>`, so they map 1:1 onto media-worker's `(Language, Gender)` key. The
-server resolves the id to either a CustomVoice built-in speaker or a Base voice-clone internally —
-the caller only sends the id.
+server resolves each id to a Base voice-clone internally — the caller only sends the id. All 12
+voices clone from a pinned reference clip, so the server loads **only the Base model**.
 
 **12 primary voices** (6 languages × male/female):
 
 | Voice id | Language | Gender | Backend | `language` string sent to model |
 | --- | --- | --- | --- | --- |
-| `en_m` | English | male | CustomVoice (`aiden`) | English |
+| `en_m` | English | male | Base clone | English |
 | `en_f` | English | female | Base clone | English |
 | `es_m` | Spanish | male | Base clone | Spanish |
 | `es_f` | Spanish | female | Base clone | Spanish |
@@ -105,19 +105,9 @@ the caller only sends the id.
 | `ja_m` | Japanese | male | Base clone | Japanese |
 | `ja_f` | Japanese | female | Base clone | Japanese |
 | `ko_m` | Korean | male | Base clone | Korean |
-| `ko_f` | Korean | female | CustomVoice (`sohee`) | Korean |
+| `ko_f` | Korean | female | Base clone | Korean |
 
-**2 comparison voices** (Base clones of the two CustomVoice presets — for A/B-ing preset vs. clone,
-and to keep a Base-only deployment option open):
-
-| Voice id | Language | Gender | Backend |
-| --- | --- | --- | --- |
-| `en_m_clone` | English | male | Base clone of the `aiden` preset |
-| `ko_f_clone` | Korean | female | Base clone of the `sohee` preset |
-
-These 14 ids are the canonical registry (`faster_qwen3_tts/server_voices/voices.yaml`). The
-`*_clone` ids are optional — production routing should use the 12 primary ids unless you are
-explicitly A/B testing.
+These 12 ids are the canonical registry (`faster_qwen3_tts/server_voices/voices.yaml`).
 
 ---
 
@@ -139,7 +129,7 @@ media-worker should map its `(Language, Gender)` enum pair to a Qwen voice id as
 | Japanese | Male | `ja_m` |
 | Japanese | Female | `ja_f` |
 | **Korean** | **Male** | **`ko_m`** |
-| **Korean** | **Female** | **`ko_f`** (or `ko_f_clone` for the Base-clone variant) |
+| **Korean** | **Female** | **`ko_f`** |
 
 The two Korean rows are the **first to switch** (see §6).
 
@@ -181,7 +171,7 @@ client), so integration mirrors the MeloTTS/Kokoro wiring. Required changes:
 
 5. **`PresetVoiceMapper`** — add the routing rows, **Korean first**:
    - `(KOREAN, MALE)   → (QWEN, "ko_m")`
-   - `(KOREAN, FEMALE) → (QWEN, "ko_f")`  *(or `"ko_f_clone"` if A/B-ing the Base-clone variant)*
+   - `(KOREAN, FEMALE) → (QWEN, "ko_f")`
 
    Extend the other languages later (the server already serves all 12 primary ids). Voice ids are
    `<lang>_<gender>` (see §3).
@@ -224,7 +214,7 @@ Port **8092** is the convention (next after melotts `8091`).
 ## 6. Rollout — repoint Korean first
 
 1. **Cut over Korean only.** Switch the two Korean `PresetVoiceMapper` rows to the Qwen provider:
-   `(KOREAN, MALE) → (QWEN, "ko_m")` and `(KOREAN, FEMALE) → (QWEN, "ko_f")` (or `ko_f_clone`).
+   `(KOREAN, MALE) → (QWEN, "ko_m")` and `(KOREAN, FEMALE) → (QWEN, "ko_f")`.
    Leave every other `(Language, Gender)` on its current engine (MeloTTS/Kokoro).
 2. **Validate in the dubbing pipeline** — run real Korean dubbing jobs end to end, confirm audio
    quality, latency, and the resource-lock serialization behave as expected. `ko_m` (male Korean) is

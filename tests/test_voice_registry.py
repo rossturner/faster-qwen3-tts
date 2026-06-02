@@ -4,11 +4,13 @@ from faster_qwen3_tts.voice_registry import load_registry, VoiceConfig
 
 REAL = Path("faster_qwen3_tts/server_voices/voices.yaml")
 
-def test_loads_all_14_real_voices():
+def test_loads_all_12_real_voices():
     reg = load_registry(REAL)
-    assert len(reg.voices) == 14
-    assert reg.resolve("en_m").type == "custom"
-    assert reg.resolve("en_m").speaker == "aiden"
+    assert len(reg.voices) == 12
+    assert all(v.type == "clone" for v in reg.voices.values())
+    en_m = reg.resolve("en_m")
+    assert en_m.type == "clone"
+    assert en_m.ref_audio.is_absolute() and en_m.ref_audio.exists()
     cfg = reg.resolve("ja_f")
     assert cfg.type == "clone"
     assert cfg.ref_audio.is_absolute() and cfg.ref_audio.exists()

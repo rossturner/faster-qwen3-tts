@@ -2,8 +2,8 @@
 sample_rate: 24000
 default_temperature: 0.7
 voices:
-  en_m: {type: custom, speaker: aiden, language: English, instruct: "Speak in a calm, clear, professional tone suitable for an instructional video."}
-  ko_f: {type: custom, speaker: sohee, language: Korean,  instruct: "Speak in a calm, clear, professional tone suitable for an instructional video."}
+  en_m: {type: clone, language: English,  ref_audio: refs/en_m_friendly_casual_ref.wav, ref_text: "Welcome to the course. Let's get started with today's lesson."}
+  ko_f: {type: clone, language: Korean,   ref_audio: refs/ko_f_friendly_casual_ref.wav, ref_text: "이 강좌에 오신 것을 환영합니다. 오늘 수업을 시작해 보겠습니다."}
   en_f: {type: clone, language: English,  ref_audio: refs/en_f_v1_ref.wav, ref_text: "Welcome to the course. Let's get started with today's lesson."}
   es_m: {type: clone, language: Spanish,  ref_audio: refs/es_m_v2_ref.wav, ref_text: "Bienvenido al curso. Vamos a empezar con la lección de hoy."}
   es_f: {type: clone, language: Spanish,  ref_audio: refs/es_f_v3_ref.wav, ref_text: "Bienvenido al curso. Vamos a empezar con la lección de hoy."}
@@ -14,5 +14,3 @@ voices:
   ja_m: {type: clone, language: Japanese, ref_audio: refs/ja_m_v1_ref.wav, ref_text: "このコースへようこそ。今日のレッスンを始めましょう。"}
   ja_f: {type: clone, language: Japanese, ref_audio: refs/ja_f_v3_ref.wav, ref_text: "このコースへようこそ。今日のレッスンを始めましょう。"}
   ko_m: {type: clone, language: Korean,   ref_audio: refs/ko_m_v3_ref.wav, ref_text: "이 강좌에 오신 것을 환영합니다. 오늘 수업을 시작해 보겠습니다."}
-  en_m_clone: {type: clone, language: English, ref_audio: refs/aiden_ref.wav, ref_text: "Welcome to the course. Let's get started with today's lesson."}
-  ko_f_clone: {type: clone, language: Korean,  ref_audio: refs/sohee_ref.wav, ref_text: "이 강좌에 오신 것을 환영합니다. 오늘 수업을 시작해 보겠습니다."}
