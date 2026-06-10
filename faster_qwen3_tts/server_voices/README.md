@@ -37,8 +37,12 @@ lives in [`../../voice-mapping.md`](../../voice-mapping.md).
   Japanese-female family; `ja_f_v3_ref.wav` came from this run.
 - [`../../design_replacement_audition.py`](../../design_replacement_audition.py) —
   repo root. Designed the `friendly_casual` candidates that replaced the former
-  CustomVoice slots; `en_m_friendly_casual_ref.wav` / `ko_f_friendly_casual_ref.wav`
-  came from this run.
+  CustomVoice slots; `ko_f_friendly_casual_ref.wav` came from this run (the original
+  `en_m_friendly_casual_ref.wav` from this run was later superseded — see below).
+- [`../../design_en_m_calm_audition.py`](../../design_en_m_calm_audition.py) — repo
+  root. Calm/clear English-male replacement audition (designs each persona, clones
+  the first 4 chunks of a real dub off each ref); `en_m_confident_mid_ref.wav` came
+  from this run, replacing the former `friendly_casual` en_m.
 - [`../../gen_voice_samples.py`](../../gen_voice_samples.py),
   [`../../generate_audition_html.py`](../../generate_audition_html.py) — repo root.
   Supporting sample-generation and audition-page tooling.
@@ -51,7 +55,7 @@ text and the `ref_text` used when cloning.
 
 | Ref clip | Voice id(s) | Generating script | Source method | Persona `instruct` | Reference line |
 | --- | --- | --- | --- | --- | --- |
-| `en_m_friendly_casual_ref.wav` | `en_m` | `design_replacement_audition.py` | VoiceDesign (English) | A relaxed, approachable man's voice in a natural mid-range with a warm, conversational tone, easy-going and personable, suitable for a friendly tutorial. | "Welcome to the course. Let's get started with today's lesson." |
+| `en_m_confident_mid_ref.wav` | `en_m` | `design_en_m_calm_audition.py` | VoiceDesign (English) | A confident, steady adult man's voice in a clear mid-range, assured and grounded, with a natural, brisk-but-composed pace, suitable for an instructional video. | "In today's lesson we'll work through each step slowly and carefully, so take your time and follow along at your own pace as we go." |
 | `en_f_v1_ref.wav` | `en_f` | `design_audition_library.py` | VoiceDesign (English) | A clear, warm adult woman's voice in a natural mid-range, calm and professional, with a relaxed, friendly delivery, suitable for narrating an instructional video course. | "Welcome to the course. Let's get started with today's lesson." |
 | `es_m_v2_ref.wav` | `es_m` | `design_audition_library.py` | VoiceDesign (Spanish) | A bright, approachable younger man's voice in a higher tenor range, with clear articulation and a relaxed, friendly delivery, suitable for an online tutorial course. | "Bienvenido al curso. Vamos a empezar con la lección de hoy." |
 | `es_f_v3_ref.wav` | `es_f` | `design_audition_library.py` | VoiceDesign (Spanish) | A warm, mature woman's voice with a smooth lower-mid tone and a steady, reassuring delivery, suitable for a professional instructional video. | "Bienvenido al curso. Vamos a empezar con la lección de hoy." |
@@ -65,5 +69,6 @@ text and the `ref_text` used when cloning.
 | `ko_f_friendly_casual_ref.wav` | `ko_f` | `design_replacement_audition.py` | VoiceDesign (Korean) | A relaxed, approachable woman's voice in a natural mid-range with a warm, conversational tone, easy-going and personable, suitable for a friendly tutorial. | "이 강좌에 오신 것을 환영합니다. 오늘 수업을 시작해 보겠습니다." |
 
 `en_m` and `ko_f` were originally the CustomVoice presets `aiden` / `sohee`; they
-were replaced by the `friendly_casual` designed voices above, so every shipped voice
-now clones from a reference clip and the server runs Base-only.
+were replaced by designed voices, so every shipped voice now clones from a reference
+clip and the server runs Base-only. (`en_m` was briefly the `friendly_casual` designed
+voice before being re-auditioned to the calmer, more present `confident_mid` above.)
