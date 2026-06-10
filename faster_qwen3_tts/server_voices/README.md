@@ -25,8 +25,8 @@ The registry is therefore Base-only at serve time — no CustomVoice model is lo
 (The server still loads CustomVoice automatically if a `type: custom` voice is ever
 added back to `voices.yaml`; today none are.)
 
-The canonical 12-voice selection, with the full persona `instruct` text per voice,
-lives in [`../../voice-mapping.md`](../../voice-mapping.md).
+The canonical voice-design reference (method, `instruct` rules, full per-voice selection,
+and history) lives in [`../../docs/voice-design.md`](../../docs/voice-design.md).
 
 ## Generation scripts
 

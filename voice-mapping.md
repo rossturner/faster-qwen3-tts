@@ -1,5 +1,9 @@
 # media-worker TTS voice mapping — FINAL selection (2026-06-01)
 
+> **Canonical doc:** [`docs/voice-design.md`](docs/voice-design.md) is now the source of
+> truth for the voice-design method and shipped selection. This file is retained as the
+> original selection notes + per-language sample sentences.
+
 The 12 chosen voices for the `media-worker` dubbing pipeline: 6 languages × male/female.
 **All twelve are VoiceDesign-designed then pinned via Base voice-clone** (one reference clip per
 voice, reused for every line so the narrator is consistent). All generated at `temperature=0.7`.
