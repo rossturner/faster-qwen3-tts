@@ -44,7 +44,7 @@ speaker basis**.
 - **Original lines** were short "Welcome to the course…" style sentences (~3.5–5.5 s clips).
 - **English (en_m, en_f) now use a longer line** (~7 s clip):
   > "In today's lesson we'll work through each step slowly and carefully, so take your time and follow along at your own pace as we go."
-- **Other languages still use the short line** (longer-ref A/B in review — see Open items).
+- **Other languages keep the short line** (longer-ref A/B auditioned and rejected — see Open items).
 
 Caveat learned the hard way: when translating a longer reference line, keep it to ~7 s.
 The first non-English longref pass rendered 10–12 s clips (translations were too verbose),
@@ -92,12 +92,15 @@ reference line is in the target language.
   designed `friendly_casual` voices (`design_replacement_audition.py`).
 - **2026-06-10** — `en_m` re-auditioned `friendly_casual` → `confident_mid` (the previous
   voice read as too energetic). Both English voices moved to a **longer reference line**;
-  `en_f` switched to `en_f_longref`. Non-English longref A/B run for review.
+  `en_f` switched to `en_f_longref`. Non-English longref A/B auditioned and **rejected** —
+  those voices kept as-is.
 
 ## Open items
 
-- **Non-English longer-reference A/B** is under review (`voice_design_longref_compare/`,
-  rendered by `compare_longref_audition.py`). Each non-English voice was re-designed from a
-  ~7 s reference line for comparison against the current short-ref production voice; not yet
-  promoted. The non-English longref takes are unseeded fresh rolls, so the comparison judges
-  both "longer ref" and "this particular re-roll's character" at once.
+- **Non-English voices stay on their original short-reference designs.** A longer-reference
+  A/B (`compare_longref_audition.py` → `voice_design_longref_compare/`) was auditioned on
+  2026-06-10 and rejected: the longref takes were single unseeded re-rolls and didn't clearly
+  beat the originals, which were themselves picked from a larger original audition
+  (`design_audition_library.py`). **Any future change to a non-English voice should go through
+  a full multi-persona audition** like the English-male one (`design_en_m_calm_audition.py`),
+  not a single longer-ref re-roll.

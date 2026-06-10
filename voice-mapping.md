@@ -18,7 +18,8 @@ model is loaded.
 > **Update (2026-06-10):** `en_m` was re-auditioned from `friendly_casual` to `en_m_confident_mid`
 > (`design_en_m_calm_audition.py`) — clearer and more present, with a natural pace. Both English voices
 > now use a longer reference line; `en_f` was moved to a longer-ref take (`en_f_longref`,
-> `compare_longref_audition.py`). Longer-ref A/B for the other languages is still in review.
+> `compare_longref_audition.py`). Longer-ref A/B for the other languages was auditioned and
+> rejected — they stay on the original short-ref designs (see `docs/voice-design.md` open items).
 
 ## The 12 slots
 
