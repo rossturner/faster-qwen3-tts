@@ -12,14 +12,16 @@ model is loaded.
 > is dropped entirely.
 >
 > **Update (2026-06-10):** `en_m` was re-auditioned from `friendly_casual` to `en_m_confident_mid`
-> (`design_en_m_calm_audition.py`) — clearer and more present, with a natural pace.
+> (`design_en_m_calm_audition.py`) — clearer and more present, with a natural pace. Both English voices
+> now use a longer reference line; `en_f` was moved to a longer-ref take (`en_f_longref`,
+> `compare_longref_audition.py`). Longer-ref A/B for the other languages is still in review.
 
 ## The 12 slots
 
 | Language | Gender | Method | Voice / clip |
 | --- | --- | --- | --- |
 | English  | male   | VoiceDesign → clone  | `en_m_confident_mid` (`faster_qwen3_tts/server_voices/refs/en_m_confident_mid_ref.wav`) |
-| English  | female | VoiceDesign → clone  | `en_f_v1` (`voice_design_audition/en_f_v1_ref.wav`) |
+| English  | female | VoiceDesign → clone  | `en_f_longref` (`faster_qwen3_tts/server_voices/refs/en_f_longref_ref.wav`) |
 | Spanish  | male   | VoiceDesign → clone  | `es_m_v2` (`voice_design_audition/es_m_v2_ref.wav`) |
 | Spanish  | female | VoiceDesign → clone  | `es_f_v3` (`voice_design_audition/es_f_v3_ref.wav`) |
 | French   | male   | VoiceDesign → clone  | `fr_m_v1` (`voice_design_audition/fr_m_v1_ref.wav`) |
@@ -39,8 +41,7 @@ instruct=<persona>, language, temperature=0.7)`, then cloned for production via
 The persona `instruct` is English-only and independent of output language.
 
 Reference line per language (the `ref_text` for cloning):
-- English: "Welcome to the course. Let's get started with today's lesson." (en_f). `en_m_confident_mid`
-  uses a longer line: "In today's lesson we'll work through each step slowly and carefully, so take your time and follow along at your own pace as we go."
+- English: both en_m and en_f use a longer line: "In today's lesson we'll work through each step slowly and carefully, so take your time and follow along at your own pace as we go." (Other languages still use the short "Welcome to the course…" line below.)
 - Spanish: "Bienvenido al curso. Vamos a empezar con la lección de hoy."
 - French:  "Bienvenue dans ce cours. Commençons la leçon d'aujourd'hui."
 - Chinese: "欢迎来到本课程。让我们开始今天的课程吧。"
@@ -50,7 +51,7 @@ Reference line per language (the `ref_text` for cloning):
 | Voice | Persona | `instruct` |
 | --- | --- | --- |
 | `en_m_confident_mid` | confident-mid | A confident, steady adult man's voice in a clear mid-range, assured and grounded, with a natural, brisk-but-composed pace, suitable for an instructional video. |
-| `en_f_v1` | mid-warm | A clear, warm adult woman's voice in a natural mid-range, calm and professional, with a relaxed, friendly delivery, suitable for narrating an instructional video course. |
+| `en_f_longref` | mid-warm | A clear, warm adult woman's voice in a natural mid-range, calm and professional, with a relaxed, friendly delivery, suitable for narrating an instructional video course. |
 | `es_m_v2` | young-bright | A bright, approachable younger man's voice in a higher tenor range, with clear articulation and a relaxed, friendly delivery, suitable for an online tutorial course. |
 | `es_f_v3` | mature-smooth | A warm, mature woman's voice with a smooth lower-mid tone and a steady, reassuring delivery, suitable for a professional instructional video. |
 | `fr_m_v1` | mid-warm | A clear, warm adult man's voice in a natural mid-range, calm and professional, with a relaxed, friendly delivery, suitable for narrating an instructional video course. |

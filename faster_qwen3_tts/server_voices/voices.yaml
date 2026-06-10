@@ -4,7 +4,7 @@ default_temperature: 0.7
 voices:
   en_m: {type: clone, language: English,  ref_audio: refs/en_m_confident_mid_ref.wav, ref_text: "In today's lesson we'll work through each step slowly and carefully, so take your time and follow along at your own pace as we go."}
   ko_f: {type: clone, language: Korean,   ref_audio: refs/ko_f_friendly_casual_ref.wav, ref_text: "이 강좌에 오신 것을 환영합니다. 오늘 수업을 시작해 보겠습니다."}
-  en_f: {type: clone, language: English,  ref_audio: refs/en_f_v1_ref.wav, ref_text: "Welcome to the course. Let's get started with today's lesson."}
+  en_f: {type: clone, language: English,  ref_audio: refs/en_f_longref_ref.wav, ref_text: "In today's lesson we'll work through each step slowly and carefully, so take your time and follow along at your own pace as we go."}
   es_m: {type: clone, language: Spanish,  ref_audio: refs/es_m_v2_ref.wav, ref_text: "Bienvenido al curso. Vamos a empezar con la lección de hoy."}
   es_f: {type: clone, language: Spanish,  ref_audio: refs/es_f_v3_ref.wav, ref_text: "Bienvenido al curso. Vamos a empezar con la lección de hoy."}
   fr_m: {type: clone, language: French,   ref_audio: refs/fr_m_v1_ref.wav, ref_text: "Bienvenue dans ce cours. Commençons la leçon d'aujourd'hui."}
