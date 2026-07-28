@@ -160,11 +160,22 @@ a single sentence and scales with length. Right for dubbing, wrong for a live lo
 
 ### `POST /v1/audio/stream` — framed streaming, for live use
 
-`{input, voice, emotion?, temperature?, chunk_size?}` → a stream of length-prefixed
-frames, `Content-Type: application/vnd.lyrebird.tts-stream`. First audio arrives in
-~335 ms regardless of input length. `chunk_size` is in codec steps (12 Hz), bounded
-1..48, default 8; smaller values cut TTFA but shrink the headroom against a slow chunk
-(407 ms at 8, 31 ms at 4).
+`{input, voice, emotion?, instruct?, temperature?, chunk_size?}` → a stream of
+length-prefixed frames, `Content-Type: application/vnd.lyrebird.tts-stream`. First audio
+arrives in ~335 ms regardless of input length — **measured on the clone path only**; a
+custom voice has no reference clip in its prefill and should be faster, but that has not
+been measured. `chunk_size` is in codec steps (12 Hz), bounded 1..48, default 8; smaller
+values cut TTFA but shrink the headroom against a slow chunk (407 ms at 8, 31 ms at 4).
+
+`instruct` is free text describing the delivery, and overrides whatever instruct the
+resolved voice/emotion declares. It only does anything on `custom` voices: on the clone
+path it moves speaking rate and nothing else, so it is not plumbed there.
+
+**`input` is sanitised before synthesis.** `*action*`, `[action]` and `<action>` are
+stripped, because Qwen3-TTS has no markup support and — measured — ignores them where
+they are harmless and speaks them aloud where they are not, varying between takes of the
+same input. Parentheses are left alone, since an aside is usually speech the caller meant
+to keep. An input that is nothing but stage directions is a 400.
 
 Frame layout is `1 byte type | 4 byte big-endian length | payload`:
 
@@ -183,7 +194,7 @@ before streaming begins still use normal status codes (400/503).
 
 Clients cancel by closing the connection, which aborts the decode loop. That matters:
 GPU work is serialised on one worker thread, so a cancelled request that kept decoding
-would delay the next one. Streaming supports `clone` voices only.
+would delay the next one. Both `clone` and `custom` voices stream.
 
 ### Voice registry
 
@@ -208,8 +219,22 @@ and emotive, where an emotion selects a reference clip:
 Emotive entries are flattened at load into `"<voice>:<emotion>"` keys, and a clone
 prompt is pre-baked per entry at warmup. Each emotion must declare its own `ref_audio`
 and `ref_text` — they are not inherited from the voice level, because the clip *is* the
-emotion. Emotion comes from the reference clip because `instruct` measurably moves only
-speaking rate on the ICL clone path, not pitch or energy.
+emotion. On a clone voice emotion has to come from the clip, since `instruct` measurably
+moves only speaking rate on the ICL clone path, not pitch or energy.
+
+On a `custom` voice it is the other way round: `speaker` inherits from the voice level
+(the speaker *is* the voice) and each emotion supplies its own `instruct`.
+
+**Two registries ship.** `voices.yaml` holds media-worker's 12 clone voices and loads
+Base only. `voices_lyrebird.yaml` holds the `ono_anna` custom voice and loads CustomVoice
+— kept separate so the dubbing deployment does not carry a ~4.8 GB model it never serves.
+Select with `serve-http --voices`.
+
+Lyrebird takes the custom route because `instruct` moves pitch and energy there, with no
+reference recording competing with it — see `docs/lyrebird-tts-spike-findings.md`
+(Experiment 3, Stage B) for the evidence, and for why the designed-voice-with-emotion-clips
+route was abandoned. **No shipped voice uses the emotive form**; it works, and is what a
+persona would use to declare named handles.
 
 ## Gotchas
 

@@ -64,7 +64,13 @@ def _build(vid: str, spec: Dict[str, Any], base_dir: Path, vtype: str, lang: str
     return VoiceConfig(vid, "clone", lang, temp, ref_audio=ref,
                        ref_text=spec["ref_text"], emotion=emotion)
 
-_INHERITABLE_KEYS = ("instruct",)
+_INHERITABLE_KEYS = {
+    # The clip *is* the emotion on a clone voice, so ref_audio/ref_text must not inherit
+    # -- an emotion that silently reuses the voice-level clip is two identical emotions.
+    "clone": ("instruct",),
+    # The speaker *is* the voice on a custom voice; the emotion varies only the instruct.
+    "custom": ("speaker", "instruct"),
+}
 
 def load_registry(path) -> Registry:
     path = Path(path)
@@ -97,7 +103,8 @@ def load_registry(path) -> Registry:
             raise ValueError(
                 f"{vid}: default_emotion {default_emotion!r} is not one of "
                 f"{sorted(emotions)}")
-        inherited = {k: v for k in _INHERITABLE_KEYS if (v := raw.get(k)) is not None}
+        inherited = {k: v for k in _INHERITABLE_KEYS[vtype]
+                     if (v := raw.get(k)) is not None}
         for ename, espec in emotions.items():
             merged = {**inherited, **espec}
             cfg = _build(vid, merged, base_dir, vtype, lang,

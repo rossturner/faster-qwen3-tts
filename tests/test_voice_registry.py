@@ -132,3 +132,46 @@ def test_duplicate_flattened_key_raises_valueerror(tmp_path):
     )
     with pytest.raises(ValueError, match="duplicate"):
         load_registry(p)
+
+
+def test_custom_emotions_inherit_the_speaker(tmp_path):
+    p = tmp_path / "v.yaml"
+    p.write_text(
+        "sample_rate: 24000\ndefault_temperature: 0.7\n"
+        "voices:\n"
+        "  ono_anna:\n    type: custom\n    speaker: ono_anna\n    language: English\n"
+        "    default_emotion: neutral\n"
+        "    emotions:\n"
+        "      neutral: {instruct: Calm and even.}\n"
+        "      amused:  {instruct: Happy and amused.}\n"
+    )
+    reg = load_registry(p)
+    # The speaker *is* the voice on a custom entry -- only the instruct varies per emotion.
+    assert reg.resolve("ono_anna").speaker == "ono_anna"
+    assert reg.resolve("ono_anna", "amused").speaker == "ono_anna"
+    assert reg.resolve("ono_anna").instruct == "Calm and even."
+    assert reg.resolve("ono_anna", "amused").instruct == "Happy and amused."
+
+
+def test_clone_emotions_still_do_not_inherit_the_clip(tmp_path):
+    p = tmp_path / "v.yaml"
+    p.write_text(
+        "sample_rate: 24000\ndefault_temperature: 0.7\n"
+        "voices:\n"
+        "  nicole:\n    type: clone\n    language: English\n"
+        "    ref_audio: base.wav\n    ref_text: hi\n"
+        "    default_emotion: amused\n"
+        "    emotions:\n"
+        "      amused: {ref_text: hi}\n"
+    )
+    with pytest.raises(ValueError, match="nicole:amused"):
+        load_registry(p)
+
+
+def test_bundled_lyrebird_registry_loads():
+    from pathlib import Path
+    import faster_qwen3_tts
+    p = Path(faster_qwen3_tts.__file__).parent / "server_voices" / "voices_lyrebird.yaml"
+    reg = load_registry(p)
+    cfg = reg.resolve("ono_anna")
+    assert (cfg.type, cfg.speaker, cfg.language) == ("custom", "ono_anna", "English")

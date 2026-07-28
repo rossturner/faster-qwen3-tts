@@ -5,7 +5,9 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from faster_qwen3_tts.server import DEFAULT_CHUNK_SIZE, MAX_INPUT_CHARS, ModelManager, build_app
+from faster_qwen3_tts.server import (
+    DEFAULT_CHUNK_SIZE, MAX_INPUT_CHARS, ModelManager, build_app, strip_stage_directions,
+)
 from faster_qwen3_tts.stream_frames import (
     FRAME_AUDIO, FRAME_END, FRAME_ERROR, FRAME_HEADER, FRAME_MARK, iter_frames,
 )
@@ -15,6 +17,23 @@ from faster_qwen3_tts.voice_registry import Registry, VoiceConfig
 def _clone_cfg(emotion=None):
     return VoiceConfig("nicole", "clone", "English", 0.7,
                        ref_audio="/tmp/x.wav", ref_text="hello", emotion=emotion)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("*laughs* Okay, fine.", "Okay, fine."),
+    ("[laughs] Okay, fine.", "Okay, fine."),
+    ("<laugh> Okay, fine.", "Okay, fine."),
+    ("That is — [laughs] — the worst idea.", "That is — — the worst idea."),
+    ("Okay, fine.", "Okay, fine."),
+    # Parentheses are left alone: an aside is usually speech the caller meant to keep.
+    ("(quietly) Okay, fine.", "(quietly) Okay, fine."),
+])
+def test_strip_stage_directions(raw, expected):
+    assert strip_stage_directions(raw) == expected
+
+
+def test_strip_stage_directions_can_empty_the_input():
+    assert strip_stage_directions("*laughs*") == ""
 
 
 class FakeBase:
@@ -33,7 +52,7 @@ class FakeBase:
         self.consumed = 0
         self.kwargs = None
 
-    def generate_voice_clone_streaming(self, **kwargs):
+    def _emit(self, **kwargs):
         self.kwargs = kwargs
         for i in range(self.chunks):
             if self.fail_at is not None and i == self.fail_at:
@@ -44,11 +63,18 @@ class FakeBase:
             yield np.zeros(2400, dtype=np.float32), 24000, {"chunk_index": i,
                                                             "decode_ms": 1.5}
 
+    def generate_voice_clone_streaming(self, **kwargs):
+        return self._emit(**kwargs)
+
+    def generate_custom_voice_streaming(self, **kwargs):
+        return self._emit(**kwargs)
+
 
 def _manager(base, cfg):
     registry = Registry(24000, {cfg.key: cfg})
     mgr = ModelManager(registry)
     mgr._base = base
+    mgr._custom = base
     mgr._clone_prompts = {cfg.key: {"fake": "prompt"}}
     mgr.ready = True
     return mgr
@@ -110,12 +136,28 @@ def test_manager_stream_propagates_generation_error():
         list(mgr.synthesize_stream(cfg, "hi", 0.7, 8))
 
 
-def test_manager_stream_rejects_custom_voice():
-    cfg = VoiceConfig("preset", "custom", "English", 0.7, speaker="aiden")
-    mgr = _manager(FakeBase(), cfg)
+def test_manager_stream_custom_voice_uses_the_custom_generator():
+    cfg = VoiceConfig("preset", "custom", "English", 0.7, speaker="ono_anna")
+    base = FakeBase(chunks=2)
+    mgr = _manager(base, cfg)
 
-    with pytest.raises(ValueError, match="clone"):
-        list(mgr.synthesize_stream(cfg, "hi", 0.7, 8))
+    out = list(mgr.synthesize_stream(cfg, "hi", 0.7, 8, instruct="Calm and even."))
+
+    assert len(out) == 2
+    assert base.kwargs["speaker"] == "ono_anna"
+    assert base.kwargs["instruct"] == "Calm and even."
+    assert "voice_clone_prompt" not in base.kwargs, "custom voices have no clone prompt"
+
+
+def test_manager_stream_clone_voice_ignores_instruct():
+    cfg = _clone_cfg()
+    base = FakeBase(chunks=1)
+    mgr = _manager(base, cfg)
+
+    list(mgr.synthesize_stream(cfg, "hi", 0.7, 8, instruct="Angry and loud."))
+
+    assert "instruct" not in base.kwargs, (
+        "instruct moves only speaking rate on the clone path; it is not plumbed there")
 
 
 class FakeStreamManager:
@@ -132,9 +174,10 @@ class FakeStreamManager:
         return np.zeros(24000, dtype=np.float32)
 
     def synthesize_stream(self, cfg, text, temperature, chunk_size,
-                          max_new_tokens=None, cancel=None):
+                          max_new_tokens=None, cancel=None, instruct=None):
         self.calls.append((cfg.key, text, temperature, chunk_size))
         self.cancel = cancel
+        self.instruct = instruct
         for i in range(self.chunks):
             if self.fail_at is not None and i == self.fail_at:
                 raise RuntimeError("decode exploded")
@@ -148,7 +191,8 @@ def _stream_registry():
                           ref_audio="/tmp/n.wav", ref_text="hi", emotion="neutral")
     amused = VoiceConfig("nicole", "clone", "English", 0.7,
                          ref_audio="/tmp/a.wav", ref_text="hi", emotion="amused")
-    preset = VoiceConfig("preset", "custom", "English", 0.7, speaker="aiden")
+    preset = VoiceConfig("preset", "custom", "English", 0.7, speaker="ono_anna",
+                         instruct="Calm and even, moderate pace, neutral tone.")
     return Registry(24000,
                     {neutral.key: neutral, amused.key: amused, preset.key: preset},
                     {"nicole": "neutral"})
@@ -230,13 +274,41 @@ def test_stream_midstream_failure_emits_error_frame_and_no_end():
     ({"input": "a" * (MAX_INPUT_CHARS + 1), "voice": "nicole"}, 400),
     ({"input": "hi", "voice": "nope"}, 400),
     ({"input": "hi", "voice": "nicole", "emotion": "furious"}, 400),
-    ({"input": "hi", "voice": "preset"}, 400),
+    ({"input": "*laughs*", "voice": "nicole"}, 400),
     ({"input": "hi", "voice": "nicole", "chunk_size": 0}, 400),
     ({"input": "hi", "voice": "nicole", "chunk_size": 999}, 400),
 ])
 def test_stream_rejects_bad_requests_before_streaming(body, expected):
     c, _ = _stream_client()
     assert c.post("/v1/audio/stream", json=body).status_code == expected
+
+
+def test_stream_accepts_a_custom_voice():
+    c, mgr = _stream_client()
+    r = c.post("/v1/audio/stream", json={"input": "hello", "voice": "preset"})
+    assert r.status_code == 200
+    assert mgr.calls[0][0] == "preset"
+
+
+def test_stream_custom_voice_uses_the_registry_instruct_by_default():
+    c, mgr = _stream_client()
+    c.post("/v1/audio/stream", json={"input": "hello", "voice": "preset"})
+    assert mgr.instruct == "Calm and even, moderate pace, neutral tone."
+
+
+def test_stream_free_text_instruct_overrides_the_registry():
+    c, mgr = _stream_client()
+    c.post("/v1/audio/stream", json={"input": "hello", "voice": "preset",
+                                     "instruct": "Tired and annoyed, slow and heavy."})
+    assert mgr.instruct == "Tired and annoyed, slow and heavy."
+
+
+def test_stream_strips_stage_directions_from_the_spoken_text():
+    c, mgr = _stream_client()
+    c.post("/v1/audio/stream",
+           json={"input": "*laughs* That is [sighs] genuinely the worst idea.",
+                 "voice": "nicole"})
+    assert mgr.calls[0][1] == "That is genuinely the worst idea."
 
 
 def test_stream_503_when_warming():

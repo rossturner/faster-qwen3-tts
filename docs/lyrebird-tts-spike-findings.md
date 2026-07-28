@@ -207,11 +207,213 @@ carriers of emotion, but not the only ones — the clips in `spikes/emotion/out/
 be listened to before Stage B commits, in case instruct is shifting something the
 metrics do not capture.
 
-## Experiment 3, Stage B — not run
+## Experiment 3, Stage B — the persona voice is `ono_anna`, directed by free-text `instruct`
 
-Deferred by decision, not blocked. It needs a persona base voice designed first, then
-the emotion set built from derived reference clips, with identity drift measured by
-speaker-embedding cosine similarity against the base.
+Stage B was specified as: design a persona voice, build an emotion set from derived
+reference clips, measure identity drift. It did not end there. **Every route to a
+*designed* voice that can also act was tried and failed**, and the voice that survived is
+a built-in one — accepting a shared timbre in exchange for delivery that works.
+
+Scripts, in the order they were run: `spikes/emotion/female_voice_audition.py`,
+`female_voice_range.py`, `voicedesign_stability.py`, `voicedesign_directions.py`,
+`xvec_splice.py`, `text_markup.py`, `text_tags_neutral.py`. Every verdict below marked
+*by ear* is the operator's; objective metrics use the same estimator as Stage A.
+
+### The built-in voices are nine, and there is no tenth
+
+The nine CustomVoice speakers are token ids in the talker's 3072-row embedding table,
+scattered between 2861 and 3066 — a spread that looks like nine names exposed out of a
+larger trained block. They are not. Comparing each row against the same row in the Base
+checkpoint:
+
+| rows | vector length | changed vs Base |
+|---|---|---|
+| the 9 named speakers | 13.9 – 15.6 | 13.9 – 15.6 |
+| the 202 unnamed ids in the block | 0.023 | **0.000** |
+
+The nine started at zero in Base and were trained into full-sized vectors. Every other id
+is byte-identical to Base and still at initialisation scale — never trained. The 0.6B
+CustomVoice ships the identical nine-entry map. **The roster is fixed and complete.**
+
+This matters because **there is no English female preset.** Both English voices (Ryan,
+Aiden) are male; all four female voices are Chinese (Vivian, Serena), Japanese
+(Ono_Anna) or Korean (Sohee). An English-speaking female persona has to come from a
+non-native preset reading English, or be designed.
+
+Licensing is clean — the repo LICENSE is plain Apache 2.0, no acceptable-use addendum,
+no likeness clause. Provenance is not published: no voice actor credits, no dataset
+documentation. These nine are also *not* the hosted Qwen3-TTS-Flash roster (17 voices,
+Cherry/Ethan/Jennifer/…); only Ryan, Dylan and Eric appear in both.
+
+### Instruct works on the built-in voices, and barely at all on clones
+
+This is Stage A's result seen from the other side. Same instructions, same estimator:
+
+| | clone (`en_f`, ICL) | built-in (`aiden`) |
+|---|---|---|
+| pitch spread across conditions | 9 Hz — inside its own noise | **37 Hz** |
+| loudness, plain → whispered | 0.108 → 0.111 (nothing) | 0.110 → **0.073** |
+
+In ICL mode the reference recording pins timbre, pitch and energy, and `instruct` can
+only modulate what the recording leaves free — rate. A built-in speaker has no recording
+competing with the instruction, so the instruction lands. **That asymmetry is the whole
+reason this experiment ended where it did.**
+
+### Ono_Anna over the other three
+
+Two auditions of the four female presets, all forced to `language: English`:
+
+- **Short sentences** (`female_voice_audition.py`, 3 sentences × 3 emotions × 4 voices,
+  36 clips). Every voice moved, and moved hard — Vivian widest at 84 Hz of pitch swing.
+- **Long passages** (`female_voice_range.py`, 9 emotions × 3 passages of 30–40 words ×
+  4 voices, 108 clips). Emotions weighted toward the everyday registers a persona
+  actually inhabits, with `neutral` passing no instruct at all as the honest baseline.
+
+Ono_Anna was chosen by ear. The measured ranges over the long passages support it —
+41.3 Hz pitch spread against Vivian's 35.7, Sohee's 26.2 and Serena's 25.5 — but the
+choice was a listening call, not a metric.
+
+**One unproven observation, recorded because it points somewhere useful.** Comparing the
+first 3 s of each long passage against the remainder, the pitch spread across emotions
+narrows: Ono_Anna 56.8 → 46.8 Hz (82% retained), Vivian 64.1 → 35.0, Serena 38.0 → 24.6,
+Sohee 55.3 → 26.8. That is consistent with the instruction gripping at the start and the
+voice drifting back to its habitual register — which would argue for short per-request
+text, something lyrebird already does for latency. **But this is one sample per cell with
+no repeats, against Stage A's ~9 Hz of run-to-run noise on pitch, and nobody has ever
+listened for it.** It is indicative, not established, and Ono_Anna is the voice it
+applies to least.
+
+Two other observations from the same run, both untested:
+
+- `neutral` — no instruct at all — gave the *highest*-pitched opening for Vivian
+  (274 Hz) and Serena (271 Hz), above their own `excited`. These voices default to
+  animated, and instructions may work more by calming than by exciting.
+- Sohee's `amused` sat below her `sad` on pitch, which is the wrong way round and was
+  never chased down.
+
+### VoiceDesign cannot hold an identity across calls — **this is the load-bearing finding**
+
+VoiceDesign was the one model that could have given both a unique voice and open-ended
+free-text direction. It cannot, because it does not stay the same person.
+
+Eight takes of one line from a **byte-identical** persona description
+(`voicedesign_stability.py`) were judged by ear as too different to be one speaker. A
+second run with the delivery language stripped out of the persona
+(`voicedesign_directions.py`, 4 emotions × 3 takes) was judged the same way, on the
+`neutral` takes where the instruct is identical across all three.
+
+**An objective attempt to measure this failed and should not be repeated in that form.**
+Pairwise speaker-embedding cosine put two obviously different speakers at 0.967 and the
+same speaker token at 0.990 — a usable range 0.023 wide, on which VoiceDesign's 0.986
+means nothing. The metric cannot resolve what the ear resolves easily. **Identity is a
+perceptual judgement here; measure it by listening.**
+
+Whether VoiceDesign obeys an emotional direction was left unresolved. Four plain
+emotions (neutral/excited/sad/angry) produced a 1.1 s pace spread once the persona's own
+delivery language was removed — but sad came out *higher*-pitched than excited in both
+runs, and the clips were not conclusive by ear.
+
+**This does not touch the design-once-and-pin route.** Drift exists only because clips
+are re-rolled; one pinned clip cloned forever has none, which is why the 12 dubbing
+voices are stable. What died is VoiceDesign as a *source of emotion*, live or as a
+multi-clip factory — every clip in such a set would be an independent draw with exactly
+this problem.
+
+### The x-vector splice does not work
+
+A clone prompt carries `ref_spk_embedding` (identity) and `ref_code` (the reference
+recording) as separate fields, so a prompt can be built from an emotional Ono_Anna clip
+with a designed voice's identity vector swapped in — prosody from one source, identity
+from another. Six emotions, two takes each (`xvec_splice.py`).
+
+The expected failure was that the recording would win, per Stage A. It did not: in five
+of six emotions the spliced output landed *above both* controls on pitch (sad: persona
+289 Hz, splice 331 Hz, Ono_Anna 224 Hz). Judged by ear as worse than either source —
+consistent with two conditioning signals disagreeing rather than one winning. **Dead.**
+
+### What the text itself can carry
+
+No markup support exists. The tokenizer's 33 added tokens are all plumbing
+(`<|audio_start|>`, `<tts_pad>`, …), and text goes verbatim into the chat template with
+no preprocessing. The 86 inline tags (`[laughing]`, `[gasp]`) belong to
+**Qwen-Audio-3.0-TTS**, a hosted API-only model, not this one. Open feature requests
+asking for tags exist on GitHub and HF with no maintainer reply.
+
+Twelve devices tested against matched controls — same instruct, same sentence, device
+removed (`text_markup.py`, 36 clips), then a neutral-instruct follow-up
+(`text_tags_neutral.py`, 11 clips):
+
+| device class | verdict |
+|---|---|
+| **Lexical vocalisations** — `Haha,` `Ugh,` `Hmm.` `Oh!` | **Work.** Every one produced the intended sound. |
+| **Typography** — ellipses, em-dash, ALL CAPS, `sooo` | **No effect.** Indistinguishable from controls; the instruct was doing the work. |
+| **Bracketed / asterisked tags** — `[laughs]` `(laughs)` `*laughs*` `<laugh>` | **Unusable — and actively dangerous.** |
+
+The tag result needs stating carefully, because the first run got it wrong. Under an
+instruct that already said "laughing", no tag was ever read aloud and all four looked
+safe — but the controls laughed too, so the instruct was producing the laugh and masking
+the tags entirely. Re-run under a neutral instruct:
+
+- `*laughs*` at the start — **spoken aloud.**
+- `[laughs]` mid-sentence — laughed on take 1, **spoke the word on take 2.** Same input.
+- `[laughs]`, `[gasps]` at the start — no effect at all, except `[gasps]` causing a
+  stumble into the first word ("Tha… That is genuinely…").
+
+So tags are ignored where they are safe, and spoken where they do anything,
+non-deterministically. **A confounded control can manufacture a safety property that
+does not exist** — the first run's "never read aloud" was an artifact, not a finding.
+
+**Requirement that falls out of this: bracketed and asterisked stage directions must
+never reach the TTS.** An LLM writing in-character dialogue emits `*laughs*` unprompted,
+so both the prompt and the adapter should exclude them.
+
+Also recorded: **the model injects paralinguistic content uninvited.** The `[sighs]`
+control sighed without being asked, matching the upstream bug report about unwanted
+laughter in output. A "neutral" read is not guaranteed clean.
+
+### Instruct form
+
+`instruct` must be written in **English or Chinese only**, independent of the output
+language — Japanese instruct for a Japanese voice is silently ignored, which is the worst
+available failure mode. Clip-caption form works and matches the house style already
+proven on the 12 dubbing voices (`docs/voice-design.md`): delivery attributes only, no
+speaker description, since the speaker is fixed by the token. For example
+`"Tired and annoyed, slow and heavy with low pitch and low energy."`
+
+The three plausible forms — caption, imperative (`"Read this in…"`), bare label — were
+never compared head to head. Caption form was adopted on the strength of the existing
+voice-design evidence, not a measurement.
+
+### What this costs
+
+**Ono_Anna is one of nine voices available to everyone using this model.** The character
+will share a timbre with other projects. That was accepted deliberately, against the
+alternative of a unique designed voice that only varies in pace. The mitigating argument
+— untested — is that a Japanese voice reading English is already an unusual combination,
+and that the writing carries more of the character than the timbre.
+
+### Consequences for the server
+
+The streaming endpoint does not support this today:
+
+- `server.py:137` (`synthesize_stream`) and `server.py:228` (the route) both reject
+  anything that is not `type: clone`; the manager only ever calls
+  `generate_voice_clone_streaming`. `generate_custom_voice_streaming` exists at
+  `model.py:1125` and is what a custom voice needs.
+- `StreamRequest` has no free-text `instruct` field. Its `emotion` field resolves a named
+  handle to a reference clip.
+- Warmup loads CustomVoice automatically once a `type: custom` entry exists, but both
+  models are then resident (~4.8 GB each — fine on the 4090 alone, less so under the GPU
+  co-tenancy risk below).
+
+**The emotive registry work — `voice:emotion` flattening and per-emotion clip baking — is
+unused by this design.** It still works and media-worker is unaffected; it was built for
+the clip-based emotion model that the evidence has since ruled out.
+
+Open design question: whether `emotion` is replaced by free-text `instruct`, or both are
+kept — a persona-declared handle resolving to an instruct string, with free text as an
+override. The second preserves `08-persona.md`'s persona-declares-handles rule while
+still allowing LLM-written direction per line.
 
 ---
 
@@ -258,11 +460,14 @@ survives as reference for lyrebird's implementation.
    revives it.
 4. **WASAPI, resampling, and a prefill under the chunk size** are all mandatory in the
    player, for the reasons in Experiment 1.
-5. **Emotion comes from reference clips**, not `instruct`. Expose it as a named handle
-   (`happy`, `sad`) resolved by adapter config — matching `08-persona.md`'s
-   persona-declares-handles rule and the old system's `{text, emotion}` contract.
-   `instruct` is still worth wiring as a secondary *pace* control, which is the one
-   thing it demonstrably does.
+5. **Use the `ono_anna` built-in voice, directed by free-text `instruct`** (Stage B).
+   Emotion cannot come from reference clips on a *designed* voice, because `instruct` is
+   pace-only on the clone path and VoiceDesign cannot hold an identity across the calls
+   needed to build a clip set. A built-in speaker has no reference recording competing
+   with the instruction, so the instruction lands. The cost is a shared timbre, accepted
+   deliberately. Lexical vocalisations (`Haha,` `Ugh,` `Hmm.`) work in the text and are
+   worth exposing; bracketed and asterisked stage directions **must be stripped before
+   the request** — they are ignored where safe and spoken aloud where not.
 6. **Never health-check the audio path on a return code.** Both audio failures in this
    spike reported success. Health must be observed downstream.
 
@@ -270,10 +475,19 @@ survives as reference for lyrebird's implementation.
 
 - **OBS capture is unverified.** The final link in the chain; needs an operator check.
 - **Stage A's conclusion is objective-only.** Pitch and energy are the measurable
-  carriers of emotion, not the only ones. The 40 clips in `spikes/emotion/out/` should
-  be listened to before Stage B commits to reference clips.
-- **Stage B was not run** — no persona voice exists, and no emotion set has been built
-  or drift-measured.
+  carriers of emotion, not the only ones. The 40 clips in `spikes/emotion/out/` were
+  never listened to. Stage B's outcome does not depend on it — the clone path was ruled
+  out on the strength of the built-in voices working, not on Stage A alone.
+- **Stage B's decay observation is unproven.** One sample per cell, no repeats, never
+  listened for. It argues for short per-request text; nothing has been built on it.
+- **The instruct form was not compared.** Caption form was adopted from the existing
+  voice-design evidence; imperative and bare-label forms were never tested against it.
+- **Whether VoiceDesign obeys emotional direction is unresolved.** It was abandoned for
+  identity drift before that question was settled, so the answer is unknown rather than
+  negative.
+- **The shared-timbre mitigation is untested.** That a Japanese voice reading English is
+  distinctive enough, and that writing carries more character than timbre, are arguments,
+  not findings.
 - **Mid-utterance cancellation was excluded by decision.** `05-performer.md` still
   specifies it and needs amending to sentence-granularity cancellation.
 - **GPU co-tenancy was excluded by decision** and is the largest unmeasured risk to the

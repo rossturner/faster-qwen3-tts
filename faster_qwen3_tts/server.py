@@ -5,7 +5,7 @@ Loads Base (1.7B) always; loads CustomVoice only if the registry has a `type: cu
 voice. The shipped registry is all clones, so the server runs Base-only.
 """
 from __future__ import annotations
-import asyncio, logging, queue, threading
+import asyncio, logging, queue, re, threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -32,6 +32,20 @@ DEFAULT_CHUNK_SIZE = 8      # 335ms TTFA with 407ms of headroom against a slow c
 MAX_CHUNK_SIZE = 48
 STREAM_MEDIA_TYPE = "application/vnd.lyrebird.tts-stream"
 
+_STAGE_DIRECTION = re.compile(r"\*[^*]*\*|\[[^\]]*\]|<[^>]*>")
+
+
+def strip_stage_directions(text: str) -> str:
+    """Remove `*action*`, `[action]` and `<action>` markup before it reaches the model.
+
+    Qwen3-TTS supports no markup: measured, these are ignored where they are harmless and
+    spoken aloud where they are not, and which one happens varies between takes of the
+    same input. An LLM writing in-character dialogue emits them unprompted, so they are
+    stripped rather than trusted. Parentheses are deliberately left alone -- a
+    parenthetical aside is usually speech the caller meant to keep.
+    """
+    return re.sub(r"\s{2,}", " ", _STAGE_DIRECTION.sub(" ", text)).strip()
+
 
 class SpeechRequest(BaseModel):
     input: str
@@ -46,6 +60,7 @@ class StreamRequest(BaseModel):
     input: str
     voice: str
     emotion: Optional[str] = None
+    instruct: Optional[str] = None
     temperature: Optional[float] = None
     chunk_size: int = DEFAULT_CHUNK_SIZE
 
@@ -120,7 +135,8 @@ class ModelManager:
 
     def synthesize_stream(self, cfg: VoiceConfig, text: str, temperature: float,
                           chunk_size: int, max_new_tokens=None,
-                          cancel: Optional[threading.Event] = None):
+                          cancel: Optional[threading.Event] = None,
+                          instruct: Optional[str] = None):
         """Yield (pcm, timing) chunks as they decode.
 
         Generation runs on the single GPU worker thread and pushes into an unbounded
@@ -128,27 +144,37 @@ class ModelManager:
         unbounded: a bounded one would block the producer when a cancelled consumer
         stops reading, pinning the GPU thread on a `put` and stalling the next request.
 
+        Clone voices replay a pre-baked ICL prompt; custom voices pass `instruct` through,
+        which is the only path where it moves anything beyond speaking rate.
+
         Setting `cancel` breaks the loop over the model's generator, which stops decode.
         Merely closing the response is not enough -- the GPU is serialised on one
         thread, so a cancelled batch that decodes to completion delays the next beat.
         `cancel` is optional only for convenience: an internal event stands in when it is
         omitted, so abandoning this generator releases the GPU thread either way.
         """
-        if cfg.type != "clone":
-            raise ValueError(f"streaming supports clone voices only, got {cfg.type!r}")
         tokens = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
+        if cfg.type == "custom":
+            def stream():
+                return self._custom.generate_custom_voice_streaming(
+                    text=text, speaker=cfg.speaker, language=cfg.language,
+                    instruct=instruct, temperature=temperature,
+                    chunk_size=chunk_size, max_new_tokens=tokens)
+        else:
+            def stream():
+                return self._base.generate_voice_clone_streaming(
+                    text=text, language=cfg.language,
+                    voice_clone_prompt=self._clone_prompts[cfg.key],
+                    ref_text=cfg.ref_text, xvec_only=False,
+                    temperature=temperature, chunk_size=chunk_size,
+                    max_new_tokens=tokens)
         stop = cancel if cancel is not None else threading.Event()
         q: queue.Queue = queue.Queue()
         done = object()
 
         def produce():
             try:
-                for chunk, _sr, timing in self._base.generate_voice_clone_streaming(
-                        text=text, language=cfg.language,
-                        voice_clone_prompt=self._clone_prompts[cfg.key],
-                        ref_text=cfg.ref_text, xvec_only=False,
-                        temperature=temperature, chunk_size=chunk_size,
-                        max_new_tokens=tokens):
+                for chunk, _sr, timing in stream():
                     if stop.is_set():
                         break
                     q.put((np.asarray(chunk, dtype=np.float32), timing))
@@ -214,20 +240,21 @@ def build_app(manager, registry: Registry) -> FastAPI:
         # is written the status code is committed and 4xx is no longer available.
         if not manager.ready:
             raise HTTPException(503, "Model warming up")
-        text = req.input.strip()
+        if len(req.input) > MAX_INPUT_CHARS:
+            raise HTTPException(400, f"'input' exceeds {MAX_INPUT_CHARS} chars; chunk upstream")
+        text = strip_stage_directions(req.input)
         if not text:
             raise HTTPException(400, "'input' is empty")
-        if len(text) > MAX_INPUT_CHARS:
-            raise HTTPException(400, f"'input' exceeds {MAX_INPUT_CHARS} chars; chunk upstream")
         if not 1 <= req.chunk_size <= MAX_CHUNK_SIZE:
             raise HTTPException(400, f"'chunk_size' must be 1..{MAX_CHUNK_SIZE}")
         try:
             cfg = registry.resolve(req.voice, req.emotion)
         except KeyError as e:
             raise HTTPException(400, str(e))
-        if cfg.type != "clone":
-            raise HTTPException(400, "streaming supports clone voices only")
         temp = req.temperature if req.temperature is not None else cfg.temperature
+        # A free-text instruct overrides the emotion handle's registry string, so the
+        # caller can direct a line the persona has no declared handle for.
+        instruct = req.instruct if req.instruct is not None else cfg.instruct
 
         cancel = threading.Event()
         sample_rate = manager.sample_rate
@@ -238,7 +265,7 @@ def build_app(manager, registry: Registry) -> FastAPI:
             audio_ms = decode_ms = 0.0
             try:
                 chunks = manager.synthesize_stream(
-                    cfg, text, temp, req.chunk_size, cancel=cancel)
+                    cfg, text, temp, req.chunk_size, cancel=cancel, instruct=instruct)
                 async for pcm, timing in iterate_in_threadpool(chunks):
                     if await request.is_disconnected():
                         cancel.set()

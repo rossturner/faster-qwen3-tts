@@ -1,0 +1,26 @@
+# faster_qwen3_tts/server_voices/voices_lyrebird.yaml
+#
+# Kept separate from voices.yaml so the dubbing deployment does not load the CustomVoice
+# model (~4.8 GB) for a voice it never serves. Select with:
+#   faster-qwen3-tts serve-http --voices faster_qwen3_tts/server_voices/voices_lyrebird.yaml
+#
+# Delivery comes from the per-request `instruct`, not from a reference clip: on a custom
+# voice the instruct moves pitch, loudness and pace, because no reference recording
+# competes with it. See docs/lyrebird-tts-spike-findings.md, Experiment 3 Stage B.
+#
+# Declared emotion handles are optional and are a persona's business, not this file's. A
+# voice that wants them takes the emotive form, where `speaker` inherits and each
+# emotion supplies its own instruct:
+#
+#   ono_anna:
+#     type: custom
+#     speaker: ono_anna
+#     language: English
+#     default_emotion: neutral
+#     emotions:
+#       neutral: {instruct: "Calm and even, moderate pace, neutral tone."}
+#       amused:  {instruct: "Happy and amused, laughing, fast-paced and bright with high pitch."}
+sample_rate: 24000
+default_temperature: 0.7
+voices:
+  ono_anna: {type: custom, speaker: ono_anna, language: English}
