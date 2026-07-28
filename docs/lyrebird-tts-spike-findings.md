@@ -207,4 +207,68 @@ carriers of emotion, but not the only ones — the clips in `spikes/emotion/out/
 be listened to before Stage B commits, in case instruct is shifting something the
 metrics do not capture.
 
-## Experiment 3, Stage B — not started.
+## Experiment 3, Stage B — not run
+
+Deferred by decision, not blocked. It needs a persona base voice designed first, then
+the emotion set built from derived reference clips, with identity drift measured by
+speaker-embedding cosine similarity against the base.
+
+---
+
+# Recommendation
+
+**Qwen3-TTS can serve lyrebird's `Voice` port, conditional on building two things that
+do not exist yet: a streaming endpoint, and the Windows player sidecar.** Neither is
+speculative — both were prototyped here and measured.
+
+## The latency budget
+
+| Stage | Measured | Note |
+|---|---|---|
+| TTS time-to-first-audio | **335 ms** | streaming, chunk_size=8 |
+| Playback to audible | **61 ms** | WASAPI, 100 ms prefill |
+| **TTS + playback subtotal** | **~400 ms** | |
+| Remaining for the fast LLM | **~600 ms** | of the ~1 s beat budget |
+
+~600 ms is enough for a local fast-profile model's first sentence. It is not enough for
+a cloud model at typical round-trip latency. This corroborates `01-architecture.md`'s own
+expectation that "a budget this tight likely points the fast profile at a local model" —
+now with a number attached rather than an assumption.
+
+Two caveats on that subtotal. It excludes the HTTP transport, because no streaming
+endpoint exists to measure — the 335 ms is library-level. And it excludes GPU
+contention, which was explicitly out of scope; the LLM sharing the 4090 will move these
+numbers.
+
+## What the design must do, on the evidence
+
+1. **Build a streaming endpoint.** The existing one-shot `/v1/audio/speech` cannot meet
+   the budget — 1.41 s to first byte for one sentence. Leave it alone: media-worker's
+   dubbing pipeline depends on it and is well served by it.
+2. **Use chunk_size=8.** 335 ms TTFA with 407 ms of headroom, versus cs=4 saving 85 ms
+   while running within 31 ms of a stutter.
+3. **Player sidecar, not WSLg.** WSLg delivered no audio at all here, and failed
+   *silently* — the writer exited 0 throughout. Do not adopt it even if a restart
+   revives it.
+4. **WASAPI, resampling, and a prefill under the chunk size** are all mandatory in the
+   player, for the reasons in Experiment 1.
+5. **Emotion comes from reference clips**, not `instruct`. Expose it as a named handle
+   (`happy`, `sad`) resolved by adapter config — matching `08-persona.md`'s
+   persona-declares-handles rule and the old system's `{text, emotion}` contract.
+   `instruct` is still worth wiring as a secondary *pace* control, which is the one
+   thing it demonstrably does.
+6. **Never health-check the audio path on a return code.** Both audio failures in this
+   spike reported success. Health must be observed downstream.
+
+## What remains unproven
+
+- **OBS capture is unverified.** The final link in the chain; needs an operator check.
+- **Stage A's conclusion is objective-only.** Pitch and energy are the measurable
+  carriers of emotion, not the only ones. The 40 clips in `spikes/emotion/out/` should
+  be listened to before Stage B commits to reference clips.
+- **Stage B was not run** — no persona voice exists, and no emotion set has been built
+  or drift-measured.
+- **Mid-utterance cancellation was excluded by decision.** `05-performer.md` still
+  specifies it and needs amending to sentence-granularity cancellation.
+- **GPU co-tenancy was excluded by decision** and is the largest unmeasured risk to the
+  budget above.
