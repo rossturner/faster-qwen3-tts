@@ -5,24 +5,32 @@ Loads Base (1.7B) always; loads CustomVoice only if the registry has a `type: cu
 voice. The shipped registry is all clones, so the server runs Base-only.
 """
 from __future__ import annotations
-import asyncio, logging, threading
+import asyncio, logging, queue, threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import iterate_in_threadpool
 
+from .stream_frames import (
+    FRAME_AUDIO, FRAME_END, FRAME_ERROR, FRAME_HEADER, FRAME_MARK,
+    encode_frame, encode_json_frame,
+)
 from .voice_registry import Registry, VoiceConfig, load_registry
-from .wav_io import to_wav_bytes
+from .wav_io import to_pcm16, to_wav_bytes
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_VOICES = Path(__file__).parent / "server_voices" / "voices.yaml"
 MAX_INPUT_CHARS = 2000
 DEFAULT_MAX_NEW_TOKENS = 1024
+DEFAULT_CHUNK_SIZE = 8      # 335ms TTFA with 407ms of headroom against a slow chunk
+MAX_CHUNK_SIZE = 48
+STREAM_MEDIA_TYPE = "application/vnd.lyrebird.tts-stream"
 
 
 class SpeechRequest(BaseModel):
@@ -32,6 +40,14 @@ class SpeechRequest(BaseModel):
     model: str = "qwen3-tts"
     speed: float = 1.0
     temperature: Optional[float] = None
+
+
+class StreamRequest(BaseModel):
+    input: str
+    voice: str
+    emotion: Optional[str] = None
+    temperature: Optional[float] = None
+    chunk_size: int = DEFAULT_CHUNK_SIZE
 
 
 class ModelManager:
@@ -64,9 +80,9 @@ class ModelManager:
         self._base = FasterQwen3TTS.from_pretrained(
             "Qwen/Qwen3-TTS-12Hz-1.7B-Base", device=self.device,
             dtype=torch.bfloat16, attn_implementation="sdpa", max_seq_len=2048)
-        for vid, cfg in self.registry.voices.items():
+        for cfg in self.registry.voices.values():
             if cfg.type == "clone":
-                self._clone_prompts[vid] = self._base.model.create_voice_clone_prompt(
+                self._clone_prompts[cfg.key] = self._base.model.create_voice_clone_prompt(
                     ref_audio=str(cfg.ref_audio), ref_text=cfg.ref_text, x_vector_only_mode=False)
         if self._custom is not None:
             cv = next(v for v in self.registry.voices.values() if v.type == "custom")
@@ -76,7 +92,7 @@ class ModelManager:
         if any_clone is not None:
             self._base.generate_voice_clone(
                 text="Warmup.", language=any_clone.language,
-                voice_clone_prompt=self._clone_prompts[any_clone.id],
+                voice_clone_prompt=self._clone_prompts[any_clone.key],
                 ref_text=any_clone.ref_text, max_new_tokens=20)
         self.ready = True
         logger.info("Warmup complete — server ready.")
@@ -94,13 +110,73 @@ class ModelManager:
         else:
             wavs, _ = self._base.generate_voice_clone(
                 text=text, language=cfg.language,
-                voice_clone_prompt=self._clone_prompts[cfg.id], ref_text=cfg.ref_text,
+                voice_clone_prompt=self._clone_prompts[cfg.key], ref_text=cfg.ref_text,
                 xvec_only=False, temperature=temperature, max_new_tokens=max_new_tokens)
         return np.asarray(wavs[0], dtype=np.float32)
 
     def synthesize(self, cfg: VoiceConfig, text: str, temperature: float, max_new_tokens=None):
         tokens = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
         return self._run(self._synthesize_blocking, cfg, text, temperature, tokens)
+
+    def synthesize_stream(self, cfg: VoiceConfig, text: str, temperature: float,
+                          chunk_size: int, max_new_tokens=None,
+                          cancel: Optional[threading.Event] = None):
+        """Yield (pcm, timing) chunks as they decode.
+
+        Generation runs on the single GPU worker thread and pushes into an unbounded
+        queue; the caller consumes from this generator. The queue is deliberately
+        unbounded: a bounded one would block the producer when a cancelled consumer
+        stops reading, pinning the GPU thread on a `put` and stalling the next request.
+
+        Setting `cancel` breaks the loop over the model's generator, which stops decode.
+        Merely closing the response is not enough -- the GPU is serialised on one
+        thread, so a cancelled batch that decodes to completion delays the next beat.
+        `cancel` is optional only for convenience: an internal event stands in when it is
+        omitted, so abandoning this generator releases the GPU thread either way.
+        """
+        if cfg.type != "clone":
+            raise ValueError(f"streaming supports clone voices only, got {cfg.type!r}")
+        tokens = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
+        stop = cancel if cancel is not None else threading.Event()
+        q: queue.Queue = queue.Queue()
+        done = object()
+
+        def produce():
+            try:
+                for chunk, _sr, timing in self._base.generate_voice_clone_streaming(
+                        text=text, language=cfg.language,
+                        voice_clone_prompt=self._clone_prompts[cfg.key],
+                        ref_text=cfg.ref_text, xvec_only=False,
+                        temperature=temperature, chunk_size=chunk_size,
+                        max_new_tokens=tokens):
+                    if stop.is_set():
+                        break
+                    q.put((np.asarray(chunk, dtype=np.float32), timing))
+            except BaseException as exc:            # surfaced to the consumer below
+                q.put(exc)
+            finally:
+                q.put(done)
+
+        future = self._gpu.submit(produce)
+        try:
+            while True:
+                # Checked before draining the queue, not only in the producer: the
+                # producer runs ahead, so a queue full of already-decoded chunks would
+                # otherwise keep being yielded long after the caller cancelled.
+                if stop.is_set():
+                    break
+                item = q.get()
+                if item is done:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            # Also runs when the caller abandons this generator (client disconnect
+            # closes it, or an early break/GC without a caller-supplied `cancel`),
+            # which is what guarantees the GPU thread is released.
+            stop.set()
+            future.result()
 
 
 def build_app(manager, registry: Registry) -> FastAPI:
@@ -131,6 +207,60 @@ def build_app(manager, registry: Registry) -> FastAPI:
         loop = asyncio.get_running_loop()
         pcm = await loop.run_in_executor(None, manager.synthesize, cfg, text, temp)
         return Response(content=to_wav_bytes(pcm, manager.sample_rate), media_type="audio/wav")
+
+    @app.post("/v1/audio/stream")
+    async def stream(req: StreamRequest, request: Request):
+        # Everything that can be rejected must be rejected here: once the first frame
+        # is written the status code is committed and 4xx is no longer available.
+        if not manager.ready:
+            raise HTTPException(503, "Model warming up")
+        text = req.input.strip()
+        if not text:
+            raise HTTPException(400, "'input' is empty")
+        if len(text) > MAX_INPUT_CHARS:
+            raise HTTPException(400, f"'input' exceeds {MAX_INPUT_CHARS} chars; chunk upstream")
+        if not 1 <= req.chunk_size <= MAX_CHUNK_SIZE:
+            raise HTTPException(400, f"'chunk_size' must be 1..{MAX_CHUNK_SIZE}")
+        try:
+            cfg = registry.resolve(req.voice, req.emotion)
+        except KeyError as e:
+            raise HTTPException(400, str(e))
+        if cfg.type != "clone":
+            raise HTTPException(400, "streaming supports clone voices only")
+        temp = req.temperature if req.temperature is not None else cfg.temperature
+
+        cancel = threading.Event()
+        sample_rate = manager.sample_rate
+
+        async def frames():
+            yield encode_json_frame(FRAME_HEADER, {
+                "sample_rate": sample_rate, "channels": 1, "format": "s16le"})
+            audio_ms = decode_ms = 0.0
+            try:
+                chunks = manager.synthesize_stream(
+                    cfg, text, temp, req.chunk_size, cancel=cancel)
+                async for pcm, timing in iterate_in_threadpool(chunks):
+                    if await request.is_disconnected():
+                        cancel.set()
+                        return
+                    audio_ms += len(pcm) / sample_rate * 1000
+                    decode_ms += float(timing.get("decode_ms", 0.0))
+                    yield encode_frame(FRAME_AUDIO, to_pcm16(pcm))
+                    yield encode_json_frame(FRAME_MARK, {
+                        "chunk_index": timing.get("chunk_index"),
+                        "decode_ms": timing.get("decode_ms"),
+                        "prefill_ms": timing.get("prefill_ms"),
+                        "audio_ms_so_far": round(audio_ms, 2),
+                    })
+                yield encode_json_frame(FRAME_END, {
+                    "total_audio_ms": round(audio_ms, 2),
+                    "total_decode_ms": round(decode_ms, 2)})
+            except Exception as exc:
+                logger.exception("streaming synthesis failed")
+                cancel.set()
+                yield encode_json_frame(FRAME_ERROR, {"message": str(exc)})
+
+        return StreamingResponse(frames(), media_type=STREAM_MEDIA_TYPE)
 
     return app
 

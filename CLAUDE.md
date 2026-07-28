@@ -145,11 +145,71 @@ CustomVoice ships **9 fixed speakers** (config IDs are lowercase; pass via `gene
 
 `eric`/`dylan` carry Chinese dialect flags handled specially in `model.py` (`spk_is_dialect`).
 
-## Serving as an HTTP API (forward-looking; server not built yet)
+## Serving as an HTTP API
 
-Goal: a long-running service that loads the 1.7B model **once**, warms up the CUDA graphs, and keeps it resident on the GPU, exposing an **OpenAI-compatible `POST /v1/audio/speech`** endpoint (`{input, lang_code/voice, response_format:"wav"}`) — matching how media-worker currently calls MeloTTS. media-worker will add a Java `QwenTTSService` and repoint Korean to it. 24 kHz WAV output is fine (media-worker normalizes to 48 kHz). Calls are effectively serialized, so single-stream latency/RTF is what matters.
+`faster_qwen3_tts/server.py` loads the 1.7B model once, warms the CUDA graphs, and keeps
+it resident. Start it with `faster-qwen3-tts serve-http --voices <voices.yaml>` (defaults:
+`--host 0.0.0.0 --port 8092`, bundled registry). `GET /health` returns 503 while warming
+and 200 once ready — never route traffic before 200. Two endpoints, two consumers:
 
-`examples/openai_server.py` is a reference FastAPI implementation of this contract (`pip install "faster-qwen3-tts[demo]"`), but note it is **voice-clone only** (`generate_voice_clone` / `_streaming`) and routes the request `voice` field through a `--voices voices.json` map of `{ref_audio, ref_text, language}`. To serve male JP/KO via VoiceDesign instead of clone, the server would need extending to call `generate_voice_design`.
+### `POST /v1/audio/speech` — whole-file, for media-worker
+
+`{input, voice, response_format:"wav", temperature?}` → one complete 24 kHz mono 16-bit
+WAV. Non-streaming: nothing is emitted until generation finishes, which costs ~1.4 s for
+a single sentence and scales with length. Right for dubbing, wrong for a live loop.
+
+### `POST /v1/audio/stream` — framed streaming, for live use
+
+`{input, voice, emotion?, temperature?, chunk_size?}` → a stream of length-prefixed
+frames, `Content-Type: application/vnd.lyrebird.tts-stream`. First audio arrives in
+~335 ms regardless of input length. `chunk_size` is in codec steps (12 Hz), bounded
+1..48, default 8; smaller values cut TTFA but shrink the headroom against a slow chunk
+(407 ms at 8, 31 ms at 4).
+
+Frame layout is `1 byte type | 4 byte big-endian length | payload`:
+
+| Type | Payload |
+|---|---|
+| `0x01` header | JSON `{sample_rate, channels, format}` |
+| `0x02` audio | raw s16le PCM |
+| `0x03` mark | JSON `{chunk_index, decode_ms, prefill_ms, audio_ms_so_far}` |
+| `0x04` error | JSON `{message}` — failure after the response began |
+| `0x05` end | JSON `{total_audio_ms, total_decode_ms}` |
+
+Framing exists because the HTTP status is committed once the first byte is sent, so a
+mid-stream failure cannot be a 5xx. **A stream that ends without an end frame is a
+failed generation, not a short one** — clients must treat it that way. Errors detected
+before streaming begins still use normal status codes (400/503).
+
+Clients cancel by closing the connection, which aborts the decode loop. That matters:
+GPU work is serialised on one worker thread, so a cancelled request that kept decoding
+would delay the next one. Streaming supports `clone` voices only.
+
+### Voice registry
+
+`voices.yaml` accepts two entry shapes. Flat, which the dubbing voices use:
+
+```yaml
+  en_m: {type: clone, language: English, ref_audio: refs/en_m.wav, ref_text: "..."}
+```
+
+and emotive, where an emotion selects a reference clip:
+
+```yaml
+  nicole:
+    type: clone
+    language: English
+    default_emotion: neutral
+    emotions:
+      neutral: {ref_audio: refs/nicole_neutral.wav, ref_text: "..."}
+      amused:  {ref_audio: refs/nicole_amused.wav,  ref_text: "..."}
+```
+
+Emotive entries are flattened at load into `"<voice>:<emotion>"` keys, and a clone
+prompt is pre-baked per entry at warmup. Each emotion must declare its own `ref_audio`
+and `ref_text` — they are not inherited from the voice level, because the clip *is* the
+emotion. Emotion comes from the reference clip because `instruct` measurably moves only
+speaking rate on the ICL clone path, not pitch or energy.
 
 ## Gotchas
 
