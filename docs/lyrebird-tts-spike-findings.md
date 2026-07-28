@@ -452,9 +452,43 @@ level than the clone path's 335 ms, as expected from having no reference clip in
 prefill, but that saving is smaller than the transport cost it was hiding.
 
 Revised budget at cs=8: **~410 ms TTS + 61 ms playback ≈ 471 ms**, leaving **~530 ms**
-for the fast LLM rather than ~600 ms. cs=4 would return ~90 ms of that, but the headroom
-argument for cs=8 (407 ms against a slow chunk, vs 31 ms at cs=4) was derived on the clone
-path and has not been re-derived here.
+for the fast LLM rather than ~600 ms.
+
+### `chunk_size` 8 holds up, and GPU contention is why
+
+The original headroom figures (407 ms at cs=8, 31 ms at cs=4) were worst inter-arrival
+gaps on the clone path, library-level. Re-measured on the custom path over HTTP as the
+quantity that actually decides it — `margin(i) = audio delivered − time since playback
+began`, which starves at zero (`spikes/streaming/chunk_margin.py`, 5 runs per cell):
+
+| | TTFA | chunk | min margin | worst gap | starved |
+|---|---|---|---|---|---|
+| **idle**, cs=4 | 260 ms | 320 ms | 320 ms | 159 ms | 0/5 |
+| **idle**, cs=8 | 345 ms | 640 ms | 640 ms | 245 ms | 0/5 |
+| **under load**, cs=4 | 1061 ms | 320 ms | **79 ms** | **606 ms** | 0/5 |
+| **under load**, cs=8 | 1285 ms | 640 ms | 640 ms | 613 ms | 0/5 |
+
+**Idle, cs=4 is comfortably safe** — the margin never dips below the opening chunk and
+grows ~180 ms per chunk, and the 31 ms figure does not reproduce (159 ms worst gap
+against a 320 ms chunk). On these numbers alone cs=4 is the better default, buying 85 ms
+on every beat.
+
+**Under contention it is not.** A competing CUDA process produces stalls of ~610 ms at
+both chunk sizes. A 640 ms chunk absorbs that; a 320 ms chunk does not, and cs=4 falls to
+**79 ms of margin** — one worse stall from stuttering — while its margin curve nearly
+flattens (320 → 525 ms over 12 chunks, versus 640 → 1727 ms at cs=8). Neither starved in
+5 runs, but cs=4 has no room left and cs=8 never left its opening margin.
+
+**So cs=8 stays the default, for the co-tenancy reason rather than the original headroom
+number.** The stall magnitude, not the mean rate, is what sets the floor: chunks must be
+longer than the worst stall.
+
+Two caveats. The load is a **crude proxy** — continuous saturating matmuls, harsher and
+more sustained than a bursty LLM — so treat it as a pessimistic bound, not a prediction.
+And it makes the more serious point plainly: **under contention TTS alone costs 1.06–1.29 s
+to first audio, exceeding the entire ~1 s beat budget before the LLM has spoken.** GPU
+co-tenancy remains the largest risk to this design, and it is now quantified rather than
+merely flagged.
 
 The design that follows from this is in
 `docs/superpowers/specs/2026-07-28-lyrebird-streaming-api-design.md`. Note one scope

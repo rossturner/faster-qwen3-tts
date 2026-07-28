@@ -173,9 +173,14 @@ the `ono_anna` custom voice, warm, 5 runs (`spikes/streaming/stream_client.py`):
 
 `chunk_size` is in codec steps (12 Hz), bounded 1..48, default 8. **The ~335 ms figure in
 the spike findings is library-level and excludes ~130 ms of server and transport cost**,
-which is roughly constant across chunk sizes; budget against the table above. Smaller
-values cut TTFA but shrink the headroom against a slow chunk (407 ms at 8, 31 ms at 4 —
-measured on the clone path and not re-derived here).
+which is roughly constant across chunk sizes; budget against the table above.
+
+**Keep it at 8.** The chunk duration is the buffer against a stall, and a chunk must be
+longer than the worst stall. Idle, cs=4 is perfectly safe and 85 ms faster. Under GPU
+contention, stalls reach ~610 ms: a 640 ms chunk (cs=8) absorbs them and never leaves its
+opening margin, while a 320 ms chunk (cs=4) falls to 79 ms of margin — one worse stall
+from stuttering. Measured in `spikes/streaming/chunk_margin.py`; full table in
+`docs/lyrebird-tts-spike-findings.md`.
 
 `instruct` is free text describing the delivery, and overrides whatever instruct the
 resolved voice/emotion declares. It only does anything on `custom` voices: on the clone
