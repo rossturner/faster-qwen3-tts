@@ -46,6 +46,11 @@ At cs=2 and cs=4 a single slow chunk very nearly starves playback. **cs=8 is the
 defensible choice**: 335 ms TTFA and 407 ms of headroom, versus cs=4 saving 85 ms of
 TTFA while running within 31 ms of a stutter.
 
+> **Superseded — see Stage B.** "Headroom" here is the worst inter-arrival gap, which is
+> not what starves playback. Measuring the delivered-audio margin directly on the custom
+> path gives cs=4 a 159 ms worst gap against a 320 ms chunk, not 31 ms. **The default is
+> now 4.**
+
 Streaming RTF (2.0–2.75) is below non-streaming (3.0–3.37), consistent with the
 documented behaviour that the codec decoder dominates streaming.
 
@@ -55,6 +60,10 @@ At cs=8, TTS consumes ~335 ms of the ~1 s beat budget, leaving ~665 ms for the f
 LLM's first sentence plus transport plus playback start. Playback start is not yet
 known — see Experiment 1. This fits only if the fast-profile LLM is local and quick;
 it does not fit a cloud model with typical round-trip latency.
+
+> **Superseded — see Stage B.** At the current default of cs=4, measured end to end over
+> HTTP: ~260–325 ms of TTS and 61 ms to audible, leaving ~615–680 ms. The conclusion that
+> it needs a local fast-profile model is unchanged.
 
 ---
 
@@ -427,10 +436,13 @@ speculative — both were prototyped here and measured.
 
 | Stage | Measured | Note |
 |---|---|---|
-| TTS time-to-first-audio | **335 ms** | streaming, chunk_size=8 |
+| TTS time-to-first-audio | **260–325 ms** | streaming, chunk_size=4, end to end over HTTP |
 | Playback to audible | **61 ms** | WASAPI, 100 ms prefill |
-| **TTS + playback subtotal** | **~400 ms** | |
-| Remaining for the fast LLM | **~600 ms** | of the ~1 s beat budget |
+| **TTS + playback subtotal** | **~320–386 ms** | |
+| Remaining for the fast LLM | **~615–680 ms** | of the ~1 s beat budget |
+
+(The original table read 335 ms / ~400 ms / ~600 ms at chunk_size 8, measured
+library-level. Both the chunk size and the inclusion of transport changed — see Stage B.)
 
 ~600 ms is enough for a local fast-profile model's first sentence. It is not enough for
 a cloud model at typical round-trip latency. This corroborates `01-architecture.md`'s own
@@ -451,10 +463,10 @@ exactly the cost this subtotal excluded. The custom path is slightly cheaper at 
 level than the clone path's 335 ms, as expected from having no reference clip in the
 prefill, but that saving is smaller than the transport cost it was hiding.
 
-Revised budget at cs=8: **~410 ms TTS + 61 ms playback ≈ 471 ms**, leaving **~530 ms**
-for the fast LLM rather than ~600 ms.
+The chunk-size default moved to 4 on the margin evidence below; the budget is restated
+there.
 
-### `chunk_size` 8 holds up, and GPU contention is why
+### `chunk_size` 4 is the default, and the old headroom figure was wrong
 
 The original headroom figures (407 ms at cs=8, 31 ms at cs=4) were worst inter-arrival
 gaps on the clone path, library-level. Re-measured on the custom path over HTTP as the
@@ -463,32 +475,20 @@ began`, which starves at zero (`spikes/streaming/chunk_margin.py`, 5 runs per ce
 
 | | TTFA | chunk | min margin | worst gap | starved |
 |---|---|---|---|---|---|
-| **idle**, cs=4 | 260 ms | 320 ms | 320 ms | 159 ms | 0/5 |
-| **idle**, cs=8 | 345 ms | 640 ms | 640 ms | 245 ms | 0/5 |
-| **under load**, cs=4 | 1061 ms | 320 ms | **79 ms** | **606 ms** | 0/5 |
-| **under load**, cs=8 | 1285 ms | 640 ms | 640 ms | 613 ms | 0/5 |
+| **cs=4** | 260 ms | 320 ms | 320 ms | 159 ms | 0/5 |
+| cs=8 | 345 ms | 640 ms | 640 ms | 245 ms | 0/5 |
 
-**Idle, cs=4 is comfortably safe** — the margin never dips below the opening chunk and
-grows ~180 ms per chunk, and the 31 ms figure does not reproduce (159 ms worst gap
-against a 320 ms chunk). On these numbers alone cs=4 is the better default, buying 85 ms
-on every beat.
+**The 31 ms figure does not reproduce** — cs=4's worst gap is 159 ms against a 320 ms
+chunk, half its buffer unused at the tightest point. The margin never dips below the
+opening chunk and climbs ~180 ms per chunk (320 → 525 ms over the first twelve), so the
+first chunk is the whole risk and everything after it is slack.
 
-**Under contention it is not.** A competing CUDA process produces stalls of ~610 ms at
-both chunk sizes. A 640 ms chunk absorbs that; a 320 ms chunk does not, and cs=4 falls to
-**79 ms of margin** — one worse stall from stuttering — while its margin curve nearly
-flattens (320 → 525 ms over 12 chunks, versus 640 → 1727 ms at cs=8). Neither starved in
-5 runs, but cs=4 has no room left and cs=8 never left its opening margin.
+**cs=4 is therefore the default**, buying 85 ms on every beat of a live exchange against
+a buffer that was never close to being spent. Revised subtotal: **~260–325 ms TTS + 61 ms
+playback ≈ 320–386 ms**, leaving **~615–680 ms** for the fast LLM.
 
-**So cs=8 stays the default, for the co-tenancy reason rather than the original headroom
-number.** The stall magnitude, not the mean rate, is what sets the floor: chunks must be
-longer than the worst stall.
-
-Two caveats. The load is a **crude proxy** — continuous saturating matmuls, harsher and
-more sustained than a bursty LLM — so treat it as a pessimistic bound, not a prediction.
-And it makes the more serious point plainly: **under contention TTS alone costs 1.06–1.29 s
-to first audio, exceeding the entire ~1 s beat budget before the LLM has spoken.** GPU
-co-tenancy remains the largest risk to this design, and it is now quantified rather than
-merely flagged.
+The chunk duration is the buffer against a single slow chunk, so the rule if that ever
+becomes tight is: the chunk must be longer than the worst stall.
 
 The design that follows from this is in
 `docs/superpowers/specs/2026-07-28-lyrebird-streaming-api-design.md`. Note one scope
@@ -501,8 +501,10 @@ survives as reference for lyrebird's implementation.
 1. **Build a streaming endpoint.** The existing one-shot `/v1/audio/speech` cannot meet
    the budget — 1.41 s to first byte for one sentence. Leave it alone: media-worker's
    dubbing pipeline depends on it and is well served by it.
-2. **Use chunk_size=8.** 335 ms TTFA with 407 ms of headroom, versus cs=4 saving 85 ms
-   while running within 31 ms of a stutter.
+2. **Use chunk_size=4** (Stage B). 260–325 ms TTFA end to end, with a 320 ms buffer
+   against a worst observed inter-arrival gap of 159 ms, and a margin that only grows
+   from there. The earlier cs=8 recommendation rested on a "headroom" figure that
+   measured the wrong quantity.
 3. **Player sidecar, not WSLg.** WSLg delivered no audio at all here, and failed
    *silently* — the writer exited 0 throughout. Do not adopt it even if a restart
    revives it.
@@ -538,5 +540,10 @@ survives as reference for lyrebird's implementation.
   not findings.
 - **Mid-utterance cancellation was excluded by decision.** `05-performer.md` still
   specifies it and needs amending to sentence-granularity cancellation.
-- **GPU co-tenancy was excluded by decision** and is the largest unmeasured risk to the
-  budget above.
+- **GPU co-tenancy was excluded by decision** and remains out of scope. One probe exists
+  and is recorded here only so it is not re-run: with a competing CUDA process (continuous
+  saturating matmuls — a crude proxy, harsher than a bursty LLM), stalls reached ~610 ms at
+  both chunk sizes, TTFA rose to 1.06–1.29 s, and cs=4's margin fell to 79 ms against
+  cs=8's 640 ms. **It decides nothing here** — the default is set on the idle numbers,
+  which are the terms in scope. It would only matter if sharing the GPU came into scope,
+  and then the rule is that the chunk must outlast the worst stall.

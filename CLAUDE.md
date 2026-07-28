@@ -114,7 +114,7 @@ model = FasterQwen3TTS.from_pretrained(
 
 Generation methods return `([audio_np], sample_rate)`; the `*_streaming` variants are generators yielding `(audio_chunk, sr, timing)`:
 
-- `generate_voice_clone(text, language, ref_audio=None, ref_text="", xvec_only=False, append_silence=True, instruct=None, voice_clone_prompt=None, non_streaming_mode=None, ...)` and `generate_voice_clone_streaming(..., chunk_size=8)`
+- `generate_voice_clone(text, language, ref_audio=None, ref_text="", xvec_only=False, append_silence=True, instruct=None, voice_clone_prompt=None, non_streaming_mode=None, ...)` and `generate_voice_clone_streaming(..., chunk_size=12)`
 - `generate_custom_voice(text, speaker, language, instruct=None, ...)` and `_streaming`
 - `generate_voice_design(text, instruct, language, ...)` and `_streaming`
 
@@ -168,19 +168,17 @@ the `ono_anna` custom voice, warm, 5 runs (`spikes/streaming/stream_client.py`):
 | `chunk_size` | TTFA | of which model | server + transport |
 |---|---|---|---|
 | 2 | 290 ms | 144 ms | ~146 ms |
-| 4 | 325 ms | 190 ms | ~135 ms |
-| 8 | **410–459 ms** | 304 ms | ~127 ms |
+| **4 (default)** | **260–325 ms** | 190 ms | ~135 ms |
+| 8 | 410–459 ms | 304 ms | ~127 ms |
 
-`chunk_size` is in codec steps (12 Hz), bounded 1..48, default 8. **The ~335 ms figure in
+`chunk_size` is in codec steps (12 Hz), bounded 1..48, default 4. **The ~335 ms figure in
 the spike findings is library-level and excludes ~130 ms of server and transport cost**,
 which is roughly constant across chunk sizes; budget against the table above.
 
-**Keep it at 8.** The chunk duration is the buffer against a stall, and a chunk must be
-longer than the worst stall. Idle, cs=4 is perfectly safe and 85 ms faster. Under GPU
-contention, stalls reach ~610 ms: a 640 ms chunk (cs=8) absorbs them and never leaves its
-opening margin, while a 320 ms chunk (cs=4) falls to 79 ms of margin — one worse stall
-from stuttering. Measured in `spikes/streaming/chunk_margin.py`; full table in
-`docs/lyrebird-tts-spike-findings.md`.
+The chunk duration doubles as the buffer against a slow chunk. At the default that buffer
+is 320 ms, against a worst observed inter-arrival gap of 159 ms — and the margin only
+grows from there, ~180 ms per chunk, so the opening chunk is the tightest moment of a
+stream. Measured in `spikes/streaming/chunk_margin.py`.
 
 `instruct` is free text describing the delivery, and overrides whatever instruct the
 resolved voice/emotion declares. It only does anything on `custom` voices: on the clone

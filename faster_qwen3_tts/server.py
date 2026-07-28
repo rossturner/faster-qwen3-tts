@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_VOICES = Path(__file__).parent / "server_voices" / "voices.yaml"
 MAX_INPUT_CHARS = 2000
 DEFAULT_MAX_NEW_TOKENS = 1024
-DEFAULT_CHUNK_SIZE = 8      # 335ms TTFA with 407ms of headroom against a slow chunk
+DEFAULT_CHUNK_SIZE = 4      # 260ms TTFA; worst observed gap 159ms against a 320ms chunk
 MAX_CHUNK_SIZE = 48
 STREAM_MEDIA_TYPE = "application/vnd.lyrebird.tts-stream"
 
