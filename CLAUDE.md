@@ -162,10 +162,20 @@ a single sentence and scales with length. Right for dubbing, wrong for a live lo
 
 `{input, voice, emotion?, instruct?, temperature?, chunk_size?}` → a stream of
 length-prefixed frames, `Content-Type: application/vnd.lyrebird.tts-stream`. First audio
-arrives in ~335 ms regardless of input length — **measured on the clone path only**; a
-custom voice has no reference clip in its prefill and should be faster, but that has not
-been measured. `chunk_size` is in codec steps (12 Hz), bounded 1..48, default 8; smaller
-values cut TTFA but shrink the headroom against a slow chunk (407 ms at 8, 31 ms at 4).
+arrives at a fixed cost regardless of input length. Measured end to end over HTTP against
+the `ono_anna` custom voice, warm, 5 runs (`spikes/streaming/stream_client.py`):
+
+| `chunk_size` | TTFA | of which model | server + transport |
+|---|---|---|---|
+| 2 | 290 ms | 144 ms | ~146 ms |
+| 4 | 325 ms | 190 ms | ~135 ms |
+| 8 | **410–459 ms** | 304 ms | ~127 ms |
+
+`chunk_size` is in codec steps (12 Hz), bounded 1..48, default 8. **The ~335 ms figure in
+the spike findings is library-level and excludes ~130 ms of server and transport cost**,
+which is roughly constant across chunk sizes; budget against the table above. Smaller
+values cut TTFA but shrink the headroom against a slow chunk (407 ms at 8, 31 ms at 4 —
+measured on the clone path and not re-derived here).
 
 `instruct` is free text describing the delivery, and overrides whatever instruct the
 resolved voice/emotion declares. It only does anything on `custom` voices: on the clone

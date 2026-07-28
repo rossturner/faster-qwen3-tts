@@ -442,6 +442,20 @@ endpoint exists to measure — the 335 ms is library-level. And it excludes GPU
 contention, which was explicitly out of scope; the LLM sharing the 4090 will move these
 numbers.
 
+**Superseded by measurement.** The endpoint now exists and was measured end to end
+against the chosen `ono_anna` custom voice, warm, 5 runs
+(`spikes/streaming/stream_client.py`): **410–459 ms at `chunk_size` 8**, 325 ms at 4,
+290 ms at 2. The model accounts for 304 ms of the cs=8 figure (prefill ~85 ms, decode
+~222 ms) and **~130 ms is server and transport**, roughly constant across chunk sizes —
+exactly the cost this subtotal excluded. The custom path is slightly cheaper at the model
+level than the clone path's 335 ms, as expected from having no reference clip in the
+prefill, but that saving is smaller than the transport cost it was hiding.
+
+Revised budget at cs=8: **~410 ms TTS + 61 ms playback ≈ 471 ms**, leaving **~530 ms**
+for the fast LLM rather than ~600 ms. cs=4 would return ~90 ms of that, but the headroom
+argument for cs=8 (407 ms against a slow chunk, vs 31 ms at cs=4) was derived on the clone
+path and has not been re-derived here.
+
 The design that follows from this is in
 `docs/superpowers/specs/2026-07-28-lyrebird-streaming-api-design.md`. Note one scope
 change decided after the spike: **playback moves to lyrebird**, which needs the samples
