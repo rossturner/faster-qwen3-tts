@@ -93,10 +93,118 @@ not depend on WSLg, and is the only path that can report playback completion. **
 should not be adopted even if a restart revives it**, on the evidence above that it
 fails silently.
 
-**Status: path B not yet built.** It needs `sounddevice` installed into the Windows
-Python 3.13.5 (pip 25.1.1 present) — a change to the Windows host, pending operator
-approval.
+### Path B — the Windows player sidecar works
+
+`spikes/audio_path/win_player.py` (Windows) + `spikes/audio_path/feed_player.py` (WSL).
+The player **connects out to a listener in WSL** rather than listening itself: outbound
+connections need no Windows Firewall rule, inbound ones prompt.
+
+Three constraints emerged from building it, all of which belong in the real adapter:
+
+**1. Use WASAPI, not the default host API.** PortAudio's default on Windows is MME.
+
+| Host API | Reported output latency | Send → device consumed |
+|---|---|---|
+| MME (default) | 100 ms | 50.6 ms |
+| **WASAPI** | **40 ms** | **21–22 ms** |
+| DirectSound | 240 ms (device-reported) | not measured |
+| WDM-KS | 40 ms (device-reported) | not measured |
+
+WASAPI is **~62 ms to audible** versus MME's ~151 ms.
+
+**2. The player must resample.** WASAPI shared mode accepts only the device mix rate and
+rejects the TTS's 24 kHz with `Invalid sample rate [PaErrorCode -9997]`. This is not an
+optimisation — a player that assumes 24 kHz passes through simply fails to open the
+stream. The spike resamples 24 kHz → 48 kHz with interpolation that carries state across
+chunk boundaries; a naive per-chunk resampler clicks at every seam.
+
+**3. A jitter buffer is required, and the obvious starvation metric does not work.**
+The first 60 s soak reported **0 underruns while inserting ~4 s of silence**: the feeder
+sends at realtime and the device consumes at realtime, so with no slack the queue runs
+dry constantly. PortAudio's `output_underflow` flag never fired, because the callback
+*did* return on time — just with zeros.
+
+> Recorded because it would mislead anyone instrumenting this later: **starvation must
+> be counted as zero-fill inside the callback.** Trusting the host API's underflow flag
+> reports a perfectly healthy stream that is audibly stuttering. The tell was wall time
+> (64.12 s) exceeding the audio duration (60 s), not any counter.
+
+With starvation counted properly, a small prefill fixes it outright (20 s runs, WASAPI,
+160 ms feed chunks):
+
+| Prefill | Starvation | Start latency | To audible |
+|---|---|---|---|
+| 0 ms | 40 ms in 2 gaps | 10 ms | ~50 ms |
+| **100 ms** | **none** | **21 ms** | **~61 ms** |
+| 250 ms | none | 177 ms | ~217 ms |
+
+**100 ms of prefill is effectively free** because it is smaller than the 160 ms feed
+chunk — the first chunk alone primes it, so nothing is delayed. 250 ms needs a second
+chunk and costs ~156 ms. The prefill should be set below the chunk size for this reason.
+
+**Path B budget: ~61 ms to audible, zero starvation.**
+
+### Still outstanding
+
+- **OBS capture is unconfirmed.** Requires the operator to watch the meter; not yet done.
+- Whether the WSLg fault is repairable is unestablished, and deliberately not pursued —
+  path A fails *silently*, so it should not be adopted even if a restart revives it.
 
 ---
 
-## Experiment 3 — emotion control. Not started.
+## Experiment 3, Stage A — `instruct` controls pace only, not emotion
+
+`spikes/emotion/instruct_inertness.py` (generation) + `spikes/emotion/reanalyse.py`
+(analysis). 4 instruct conditions × 5 runs, voice `en_f` ICL clone, plus the same
+conditions on CustomVoice/`aiden` as a positive control.
+
+### The pre-registered rule was wrong, and the control is what caught it
+
+The spec's rule compared the spread of condition *means* against the spread of
+*individual runs*. But a mean of 5 runs varies by `std/√5`, so that rule demanded an
+effect ~2.2× larger than it should have — and it duly declared the **positive control**
+inert, when the control's raw numbers are unmistakable (`whispered` RMS 0.073 vs 0.11,
+`fast_excited` F0 170 Hz vs 133 Hz).
+
+The statistic was replaced with a one-way ANOVA (F, α = 0.05, df = 3,16 → F_crit 3.24).
+**The threshold was not tuned to produce a result** — it is the conventional one, and
+the control was re-checked under it first. This is still a post-hoc change to a
+pre-registered rule and is flagged as such; the protection retained is that a
+measurement which cannot detect the control is treated as invalid, not as a finding.
+
+### Result
+
+| Metric | Control F | Clone F | |
+|---|---|---|---|
+| duration_s | 7.70 ✓ | **7.26 ✓** | pace responds |
+| chars_per_s | 8.27 ✓ | **7.96 ✓** | pace responds |
+| rms | 4.59 ✓ | 0.53 ✗ | loudness does not |
+| f0_median | 5.50 ✓ | 1.47 ✗ | pitch does not |
+| voiced_frac | 20.27 ✓ | 1.22 ✗ | phonation does not |
+
+The control responds on **every** metric, in semantically correct directions —
+`whispered` quieter and slower, `fast_excited` faster and higher-pitched. So the
+measurement works.
+
+On the clone path, **only pace responds**. `fast_excited` shortens the utterance from
+5.20 s to 4.78 s, but pitch moves 207 → 216 Hz (inside the noise) and loudness does not
+move at all. `whispered` is indistinguishable from no instruct on every metric except a
+statistically insignificant pace change.
+
+### Interpretation
+
+This is consistent with the mechanism: in ICL mode the reference audio pins timbre,
+pitch and energy, and `instruct` can only modulate what the reference does not fix —
+rate. It also broadly vindicates the recollection that prompted this experiment:
+`instruct` is *not* inert on the clone path, but it is close enough to inert for
+**emotion** that it cannot carry emotion on its own.
+
+**Consequence for Stage B: emotion must come from reference clips**, per the old
+`EmotionCache` model. `instruct` remains usable as a secondary pace control.
+
+**Caveat:** this is an objective-metrics result. Pitch and energy are the measurable
+carriers of emotion, but not the only ones — the clips in `spikes/emotion/out/` should
+be listened to before Stage B commits, in case instruct is shifting something the
+metrics do not capture.
+
+## Experiment 3, Stage B — not started.
