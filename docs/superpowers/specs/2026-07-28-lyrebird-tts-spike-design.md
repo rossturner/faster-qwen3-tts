@@ -62,6 +62,12 @@ Two paths, both confirmed feasible with no new installs:
 playback started; dropouts across a continuous 60 s chunked stream; whether OBS
 registers the audio.
 
+Dropouts are detected differently per path, because path A gives no introspection:
+for **path B**, the player counts buffer starvations directly; for **path A**, by
+comparing elapsed wall time against the audio duration submitted — a stream that takes
+materially longer than its own duration to play out has stalled. Both paths also feed a
+continuous tone, where a dropout is trivially audible on the one required human check.
+
 **Honest limit:** true acoustic mouth-to-ear latency is not measurable without a
 loopback capture rig. This experiment measures *pipeline* timestamps and requires one
 human confirmation that OBS's meter moves. Any number reported is pipeline latency and
@@ -128,9 +134,10 @@ don't sound identical — an idea worth keeping regardless of mechanism).
 ### Stage A — is `instruct` inert on our path?
 
 A cheap, objective gate before any voice-design work. Fixed text, fixed pinned clone
-prompt, fixed temperature; several instructs spanning contradictory prosody ("slow and
-sad", "fast and excited", none). Because generation is unseeded, **each condition runs
-several times** so the instruct effect can be separated from sampling noise.
+prompt, fixed temperature. **Four conditions** spanning contradictory prosody — no
+instruct, "slow and sad", "fast and excited", "whispered and quiet" — and because
+generation is unseeded, **5 runs per condition** so the instruct effect can be separated
+from sampling noise.
 
 Metrics: audio duration, speaking rate, F0 mean/spread, RMS energy.
 
@@ -139,9 +146,17 @@ where Alibaba documents instruct as supported. Without it, a null result is ambi
 it could mean instruct is inert, or merely that the metrics are too insensitive to
 detect it. The control tells those apart.
 
-**Decision rule, fixed in advance:** if the between-instruct effect on the clone path is
-not clearly larger than the run-to-run noise *while the control shows a clear effect*,
-instruct is inert on our path and Stage B uses reference clips.
+**Decision rule, fixed in advance** (stated numerically so the result cannot be argued
+after the fact): for each metric, compare the spread of condition means against the
+mean within-condition spread across the 5 runs. Instruct is judged **effective** on a
+metric when the between-condition spread exceeds **2×** the within-condition spread —
+i.e. the instructs move the output further than resampling the same instruct does.
+
+- Clone path effective on ≥1 metric → instruct works; Stage B can use it.
+- Clone path inert **and control effective** → instruct is inert on the clone path;
+  Stage B uses reference clips.
+- Control also inert → the measurement is at fault, not the engine; reported as
+  inconclusive rather than as a finding about Qwen.
 
 ### Stage B — build the emotion set
 
