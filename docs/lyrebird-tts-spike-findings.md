@@ -240,6 +240,12 @@ endpoint exists to measure — the 335 ms is library-level. And it excludes GPU
 contention, which was explicitly out of scope; the LLM sharing the 4090 will move these
 numbers.
 
+The design that follows from this is in
+`docs/superpowers/specs/2026-07-28-lyrebird-streaming-api-design.md`. Note one scope
+change decided after the spike: **playback moves to lyrebird**, which needs the samples
+for lip-sync anyway. This repo becomes synthesis only; the player sidecar built here
+survives as reference for lyrebird's implementation.
+
 ## What the design must do, on the evidence
 
 1. **Build a streaming endpoint.** The existing one-shot `/v1/audio/speech` cannot meet
