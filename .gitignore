@@ -12,6 +12,8 @@ __pycache__/
 !faster_qwen3_tts/server_voices/refs/
 !faster_qwen3_tts/server_voices/refs/*.wav
 !faster_qwen3_tts/server_voices/*.yaml
+!faster_qwen3_tts/server_voices/characters/
+!faster_qwen3_tts/server_voices/characters/**/*.wav
 
 # Build artifacts (regenerable)
 build/
