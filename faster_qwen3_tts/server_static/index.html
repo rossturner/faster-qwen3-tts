@@ -1,0 +1,244 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Character audition</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 24px;
+         max-width: 1000px; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
+         margin-bottom: 12px; }
+  label { display: block; font-size: 12px; opacity: .7; margin-bottom: 2px; }
+  select, input, textarea, button { font: inherit; padding: 6px 8px; }
+  textarea { width: 100%; height: 70px; box-sizing: border-box; }
+  button { cursor: pointer; }
+  button[disabled] { cursor: default; opacity: .5; }
+  #status { margin: 12px 0; min-height: 1.5em; }
+  .err { color: #c00; }
+  .warn { color: #b60; }
+  #ttfa { font-size: 28px; font-weight: 600; }
+  #ttfa small { font-size: 12px; font-weight: 400; opacity: .7; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #8883;
+           font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  tr.underrun td { background: #c0000018; }
+  .wrap { overflow-x: auto; }
+</style>
+
+<h1>Character audition</h1>
+
+<div class="row">
+  <div><label for="voice">Character</label><select id="voice"></select></div>
+  <div><label for="emotion">Emotion</label><select id="emotion"></select></div>
+  <div><label for="chunk">Chunk size</label>
+       <input id="chunk" type="number" value="4" min="1" max="48" style="width:5em"></div>
+  <div><button id="go">Generate</button></div>
+  <div><button id="stop" disabled>Stop</button></div>
+</div>
+
+<textarea id="text">Haha, no. I have read this same error message four times now and it still says nothing useful.</textarea>
+
+<div id="status"></div>
+<div id="ttfa"></div>
+<div class="wrap"><table id="chunks"><thead><tr>
+  <th>#</th><th>decode ms</th><th>prefill ms</th><th>gap ms</th>
+  <th>audio ms</th><th>margin ms</th>
+</tr></thead><tbody></tbody></table></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let voices = [], ctl = null, ctx = null;
+
+function setStatus(msg, cls) {
+  $('status').className = cls || '';
+  $('status').textContent = msg;
+}
+
+function addOption(sel, value, label) {
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = label;
+  sel.appendChild(opt);
+}
+
+async function loadVoices() {
+  voices = await (await fetch('/v1/voices')).json();
+  const sel = $('voice');
+  sel.innerHTML = '';
+  voices.forEach(v => addOption(sel, v.id, v.id));
+  onVoiceChange();
+}
+
+function onVoiceChange() {
+  const v = voices.find(x => x.id === $('voice').value);
+  const sel = $('emotion');
+  sel.innerHTML = '';
+  if (!v || !v.emotions) { addOption(sel, '', '—'); return; }
+  Object.entries(v.emotions).forEach(([name, count]) => {
+    // count null means a custom voice: no recordings involved, always available.
+    const falls = v.emotion_fallback && count === 0;
+    const label = falls ? `${name} (falls back to neutral)`
+                        : count === null ? name : `${name} (${count})`;
+    addOption(sel, name, label);
+  });
+}
+
+async function pollHealth() {
+  try {
+    const r = await fetch('/health');
+    if (r.status === 200) { $('go').disabled = false; setStatus('ready'); return; }
+    const body = await r.json();
+    if (body.status === 'failed') {
+      setStatus('server warmup failed: ' + body.error, 'err');
+      return;                                  // no point retrying a dead warmup
+    }
+    setStatus('server warming up…', 'warn');
+  } catch (e) {
+    setStatus('server unreachable', 'err');
+  }
+  setTimeout(pollHealth, 2000);
+}
+
+function readFrames(reader) {
+  // 1 byte type | 4 byte big-endian length | payload
+  let buf = new Uint8Array(0);
+  return {
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        const next = new Uint8Array(buf.length + value.length);
+        next.set(buf); next.set(value, buf.length);
+        buf = next;
+        while (buf.length >= 5) {
+          const len = new DataView(buf.buffer, buf.byteOffset, 5).getUint32(1);
+          if (buf.length < 5 + len) break;
+          const frame = { type: buf[0], payload: buf.slice(5, 5 + len),
+                          at: performance.now() };
+          buf = buf.slice(5 + len);
+          yield frame;
+        }
+      }
+    }
+  };
+}
+
+function makePlayer() {
+  let nextStart = 0, playbackStart = 0, started = false;
+  return {
+    get playbackStart() { return playbackStart; },
+    push(payload) {
+      const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+      const n = payload.byteLength / 2;
+      const f32 = new Float32Array(n);
+      for (let i = 0; i < n; i++) f32[i] = view.getInt16(i * 2, true) / 32768;
+      const audio = ctx.createBuffer(1, n, 24000);
+      audio.copyToChannel(f32, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = audio;
+      src.connect(ctx.destination);
+      const now = ctx.currentTime;
+      if (!started) { nextStart = now + 0.02; playbackStart = performance.now();
+                      started = true; }
+      // Without the clamp a late chunk is scheduled in the past, start() fires it
+      // immediately, and the audio overlaps -- hiding the very underrun this page
+      // exists to show.
+      let underrun = false;
+      if (nextStart < now) { nextStart = now; underrun = true; }
+      src.start(nextStart);
+      nextStart += audio.duration;
+      return { underrun, seconds: audio.duration };
+    }
+  };
+}
+
+async function generate() {
+  $('go').disabled = true; $('stop').disabled = false;
+  $('chunks').tBodies[0].innerHTML = ''; $('ttfa').textContent = '';
+  setStatus('generating…');
+
+  // Constructed on the gesture: an ungestured AudioContext is blocked and warns.
+  if (!ctx) ctx = new AudioContext();
+  await ctx.resume();
+
+  const player = makePlayer();
+  ctl = new AbortController();
+  const body = { input: $('text').value, voice: $('voice').value,
+                 chunk_size: Number($('chunk').value) };
+  if ($('emotion').value) body.emotion = $('emotion').value;
+
+  const sent = performance.now();
+  let ttfa = null, delivered = 0, prev = null, sawEnd = false, sawError = false,
+      header = null;
+  try {
+    const res = await fetch('/v1/audio/stream', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: ctl.signal });
+    if (!res.ok) { setStatus(`${res.status}: ${await res.text()}`, 'err'); return; }
+
+    let pendingUnderrun = false;
+    for await (const f of readFrames(res.body.getReader())) {
+      if (f.type === 1) {
+        header = JSON.parse(new TextDecoder().decode(f.payload));
+        const fell = header.requested_emotion &&
+                     header.requested_emotion !== header.emotion;
+        setStatus(`${header.voice} · ${header.emotion}` +
+                  (fell ? ` (asked for ${header.requested_emotion}, fell back)` : '') +
+                  (header.reference ? ` · reference "${header.reference}"` : ''),
+                  fell ? 'warn' : '');
+      } else if (f.type === 2) {
+        if (ttfa === null) {
+          ttfa = f.at - sent;
+          $('ttfa').innerHTML = `${ttfa.toFixed(0)} ms ` +
+            `<small>time to first audio — varies with the chosen reference, ` +
+            `since prefill scales with clip length</small>`;
+        }
+        const r = player.push(f.payload);
+        delivered += r.seconds * 1000;
+        pendingUnderrun = r.underrun;
+      } else if (f.type === 3) {
+        const m = JSON.parse(new TextDecoder().decode(f.payload));
+        const gap = prev === null ? 0 : f.at - prev;
+        prev = f.at;
+        const margin = delivered - (f.at - player.playbackStart);
+        const row = $('chunks').tBodies[0].insertRow();
+        if (pendingUnderrun) row.className = 'underrun';
+        [m.chunk_index,
+         m.decode_ms == null ? '' : m.decode_ms.toFixed(1),
+         // The server sends a literal 0 after the first chunk, not null.
+         !m.prefill_ms ? '' : m.prefill_ms.toFixed(1),
+         gap.toFixed(0),
+         delivered.toFixed(0),
+         margin.toFixed(0)].forEach(v => row.insertCell().textContent = v);
+      } else if (f.type === 4) {
+        sawError = true;
+        const e = JSON.parse(new TextDecoder().decode(f.payload));
+        setStatus('generation failed: ' + e.message, 'err');
+      } else if (f.type === 5) {
+        sawEnd = true;
+        const e = JSON.parse(new TextDecoder().decode(f.payload));
+        setStatus(`done · ${e.total_audio_ms.toFixed(0)} ms audio · ` +
+                  `${e.total_decode_ms.toFixed(0)} ms decode` +
+                  (header && header.reference ? ` · reference "${header.reference}"` : ''));
+      }
+    }
+    // The wire contract: no end frame means the generation failed, not that it was short.
+    if (!sawEnd && !sawError && !ctl.signal.aborted) {
+      setStatus('stream ended without an end frame — failed generation', 'err');
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') setStatus('error: ' + e.message, 'err');
+  } finally {
+    $('go').disabled = false; $('stop').disabled = true; ctl = null;
+  }
+}
+
+$('voice').addEventListener('change', onVoiceChange);
+$('go').addEventListener('click', generate);
+$('stop').addEventListener('click', () => { if (ctl) { ctl.abort();
+  setStatus('cancelled'); } });
+$('go').disabled = true;
+loadVoices();
+pollHealth();
+</script>

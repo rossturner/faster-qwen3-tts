@@ -5,6 +5,7 @@ bench_out/
 tests/
 docs/
 *.html
+!faster_qwen3_tts/server_static/*.html
 .git/
 __pycache__/
 spikes/

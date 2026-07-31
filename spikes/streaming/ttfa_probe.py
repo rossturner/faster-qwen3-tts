@@ -51,27 +51,30 @@ def load():
         "Qwen/Qwen3-TTS-12Hz-1.7B-Base", device="cuda", dtype=torch.bfloat16,
         attn_implementation="sdpa", max_seq_len=2048,
     )
+    reference = cfg.references[0]
     prompt = model.model.create_voice_clone_prompt(
-        ref_audio=str(cfg.ref_audio), ref_text=cfg.ref_text, x_vector_only_mode=False)
+        ref_audio=str(reference.audio), ref_text=reference.text, x_vector_only_mode=False)
     return model, prompt, cfg
 
 
 def warm(model, prompt, cfg) -> None:
     """Capture graphs on both paths before measuring anything."""
+    reference = cfg.references[0]
     model.generate_voice_clone(text="Warming up.", language=cfg.language,
-                               voice_clone_prompt=prompt, ref_text=cfg.ref_text,
+                               voice_clone_prompt=prompt, ref_text=reference.text,
                                max_new_tokens=32)
     for _ in model.generate_voice_clone_streaming(
             text="Warming up.", language=cfg.language, voice_clone_prompt=prompt,
-            ref_text=cfg.ref_text, chunk_size=4, max_new_tokens=32):
+            ref_text=reference.text, chunk_size=4, max_new_tokens=32):
         pass
 
 
 def time_non_streaming(model, prompt, cfg, text: str) -> dict:
+    reference = cfg.references[0]
     start = time.perf_counter()
     wavs, sr = model.generate_voice_clone(
         text=text, language=cfg.language, voice_clone_prompt=prompt,
-        ref_text=cfg.ref_text, xvec_only=False, temperature=0.7)
+        ref_text=reference.text, xvec_only=False, temperature=0.7)
     elapsed = time.perf_counter() - start
     audio_s = len(wavs[0]) / sr
     return {"first_byte_s": round(elapsed, 4), "audio_s": round(audio_s, 3),
@@ -79,13 +82,14 @@ def time_non_streaming(model, prompt, cfg, text: str) -> dict:
 
 
 def time_streaming(model, prompt, cfg, text: str, chunk_size: int) -> dict:
+    reference = cfg.references[0]
     start = time.perf_counter()
     ttfa = None
     arrivals, margins = [], []
     audio_s = 0.0
     for chunk, sr, _timing in model.generate_voice_clone_streaming(
             text=text, language=cfg.language, voice_clone_prompt=prompt,
-            ref_text=cfg.ref_text, chunk_size=chunk_size, temperature=0.7):
+            ref_text=reference.text, chunk_size=chunk_size, temperature=0.7):
         now = time.perf_counter() - start
         if ttfa is None:
             ttfa = now

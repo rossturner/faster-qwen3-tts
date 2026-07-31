@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,12 +12,13 @@ from faster_qwen3_tts.server import (
 from faster_qwen3_tts.stream_frames import (
     FRAME_AUDIO, FRAME_END, FRAME_ERROR, FRAME_HEADER, FRAME_MARK, iter_frames,
 )
-from faster_qwen3_tts.voice_registry import Registry, VoiceConfig
+from faster_qwen3_tts.voice_registry import Reference, Registry, VoiceConfig, pick_reference
 
 
 def _clone_cfg(emotion=None):
     return VoiceConfig("nicole", "clone", "English", 0.7,
-                       ref_audio="/tmp/x.wav", ref_text="hello", emotion=emotion)
+                       references=(Reference("ref", Path("/tmp/x.wav"), "hello"),),
+                       emotion=emotion)
 
 
 @pytest.mark.parametrize("raw,expected", [
@@ -75,7 +77,7 @@ def _manager(base, cfg):
     mgr = ModelManager(registry)
     mgr._base = base
     mgr._custom = base
-    mgr._clone_prompts = {cfg.key: {"fake": "prompt"}}
+    mgr._clone_prompts = {(cfg.key, "ref"): {"fake": "prompt"}}
     mgr.ready = True
     return mgr
 
@@ -85,7 +87,7 @@ def test_manager_stream_yields_all_chunks():
     base = FakeBase(chunks=3)
     mgr = _manager(base, cfg)
 
-    out = list(mgr.synthesize_stream(cfg, "hi there", 0.7, chunk_size=8))
+    out = list(mgr.synthesize_stream(cfg, pick_reference(cfg), "hi there", 0.7, chunk_size=8))
 
     assert len(out) == 3
     assert out[0][0].shape == (2400,)
@@ -102,7 +104,7 @@ def test_manager_stream_cancel_stops_generation():
     cancel = threading.Event()
 
     got = 0
-    for _chunk, _timing in mgr.synthesize_stream(cfg, "hi", 0.7, 8, cancel=cancel):
+    for _chunk, _timing in mgr.synthesize_stream(cfg, pick_reference(cfg), "hi", 0.7, 8, cancel=cancel):
         got += 1
         if got == 2:
             cancel.set()
@@ -116,7 +118,7 @@ def test_manager_stream_abandon_without_cancel_stops_generation():
     base = FakeBase(chunks=50, delay=0.01)
     mgr = _manager(base, cfg)
 
-    gen = mgr.synthesize_stream(cfg, "hi", 0.7, 8)
+    gen = mgr.synthesize_stream(cfg, pick_reference(cfg), "hi", 0.7, 8)
     got = 0
     for _chunk, _timing in gen:
         got += 1
@@ -133,7 +135,7 @@ def test_manager_stream_propagates_generation_error():
     mgr = _manager(FakeBase(chunks=5, fail_at=2), cfg)
 
     with pytest.raises(RuntimeError, match="decode exploded"):
-        list(mgr.synthesize_stream(cfg, "hi", 0.7, 8))
+        list(mgr.synthesize_stream(cfg, pick_reference(cfg), "hi", 0.7, 8))
 
 
 def test_manager_stream_custom_voice_uses_the_custom_generator():
@@ -141,7 +143,7 @@ def test_manager_stream_custom_voice_uses_the_custom_generator():
     base = FakeBase(chunks=2)
     mgr = _manager(base, cfg)
 
-    out = list(mgr.synthesize_stream(cfg, "hi", 0.7, 8, instruct="Calm and even."))
+    out = list(mgr.synthesize_stream(cfg, pick_reference(cfg), "hi", 0.7, 8, instruct="Calm and even."))
 
     assert len(out) == 2
     assert base.kwargs["speaker"] == "ono_anna"
@@ -154,7 +156,7 @@ def test_manager_stream_clone_voice_ignores_instruct():
     base = FakeBase(chunks=1)
     mgr = _manager(base, cfg)
 
-    list(mgr.synthesize_stream(cfg, "hi", 0.7, 8, instruct="Angry and loud."))
+    list(mgr.synthesize_stream(cfg, pick_reference(cfg), "hi", 0.7, 8, instruct="Angry and loud."))
 
     assert "instruct" not in base.kwargs, (
         "instruct moves only speaking rate on the clone path; it is not plumbed there")
@@ -170,14 +172,15 @@ class FakeStreamManager:
         self.calls = []
         self.cancel = None
 
-    def synthesize(self, cfg, text, temperature, max_new_tokens=None):
+    def synthesize(self, cfg, reference, text, temperature, max_new_tokens=None):
         return np.zeros(24000, dtype=np.float32)
 
-    def synthesize_stream(self, cfg, text, temperature, chunk_size,
+    def synthesize_stream(self, cfg, reference, text, temperature, chunk_size,
                           max_new_tokens=None, cancel=None, instruct=None):
         self.calls.append((cfg.key, text, temperature, chunk_size))
         self.cancel = cancel
         self.instruct = instruct
+        self.reference = reference
         for i in range(self.chunks):
             if self.fail_at is not None and i == self.fail_at:
                 raise RuntimeError("decode exploded")
@@ -188,9 +191,11 @@ class FakeStreamManager:
 
 def _stream_registry():
     neutral = VoiceConfig("nicole", "clone", "English", 0.7,
-                          ref_audio="/tmp/n.wav", ref_text="hi", emotion="neutral")
+                          references=(Reference("ref", Path("/tmp/n.wav"), "hi"),),
+                          emotion="neutral")
     amused = VoiceConfig("nicole", "clone", "English", 0.7,
-                         ref_audio="/tmp/a.wav", ref_text="hi", emotion="amused")
+                         references=(Reference("ref", Path("/tmp/a.wav"), "hi"),),
+                         emotion="amused")
     preset = VoiceConfig("preset", "custom", "English", 0.7, speaker="ono_anna",
                          instruct="Calm and even, moderate pace, neutral tone.")
     return Registry(24000,
@@ -227,7 +232,39 @@ def test_stream_header_frame_describes_the_audio():
     c, _ = _stream_client()
     r = c.post("/v1/audio/stream", json={"input": "hello", "voice": "nicole"})
     header = json.loads(_frames(r)[0][1])
-    assert header == {"sample_rate": 24000, "channels": 1, "format": "s16le"}
+    assert header["sample_rate"] == 24000
+    assert header["channels"] == 1
+    assert header["format"] == "s16le"
+
+
+def test_stream_header_frame_reports_voice_emotion_and_reference():
+    import json
+    c, _ = _stream_client()
+    r = c.post("/v1/audio/stream", json={"input": "hello", "voice": "nicole",
+                                         "emotion": "amused"})
+    header = json.loads(_frames(r)[0][1])
+    assert header["sample_rate"] == 24000
+    assert header["voice"] == "nicole"
+    assert header["emotion"] == "amused"
+    assert header["requested_emotion"] == "amused"
+    assert header["reference"] == "ref"
+
+
+def test_stream_header_frame_requested_emotion_is_null_when_omitted():
+    import json
+    c, _ = _stream_client()
+    r = c.post("/v1/audio/stream", json={"input": "hello", "voice": "nicole"})
+    header = json.loads(_frames(r)[0][1])
+    assert header["requested_emotion"] is None
+    assert header["emotion"] == "neutral"
+
+
+def test_stream_header_frame_reference_is_null_for_a_custom_voice():
+    import json
+    c, _ = _stream_client()
+    r = c.post("/v1/audio/stream", json={"input": "hello", "voice": "preset"})
+    header = json.loads(_frames(r)[0][1])
+    assert header["reference"] is None
 
 
 def test_stream_audio_frames_are_pcm16():
@@ -251,6 +288,14 @@ def test_stream_emotion_is_resolved():
                json={"input": "hello", "voice": "nicole", "emotion": "amused"})
     assert r.status_code == 200
     assert mgr.calls[0][0] == "nicole:amused"
+
+
+def test_stream_passes_a_real_reference_for_a_clone_voice():
+    c, mgr = _stream_client()
+    r = c.post("/v1/audio/stream", json={"input": "hello", "voice": "nicole"})
+    assert r.status_code == 200
+    assert mgr.reference is not None
+    assert mgr.reference.id == "ref"
 
 
 def test_stream_passes_a_cancel_event():

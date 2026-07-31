@@ -12,7 +12,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from starlette.concurrency import iterate_in_threadpool
 
@@ -20,12 +20,17 @@ from .stream_frames import (
     FRAME_AUDIO, FRAME_END, FRAME_ERROR, FRAME_HEADER, FRAME_MARK,
     encode_frame, encode_json_frame,
 )
-from .voice_registry import Registry, VoiceConfig, load_registry
+from .characters import load_characters
+from .voice_registry import (
+    DEFAULT_TEMPERATURE, EMOTIONS, Reference, Registry, VoiceConfig, load_registry, merge, pick_reference,
+)
 from .wav_io import to_pcm16, to_wav_bytes
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_VOICES = Path(__file__).parent / "server_voices" / "voices.yaml"
+DEFAULT_CHARACTERS = Path(__file__).parent / "server_voices" / "characters"
+STATIC_DIR = Path(__file__).parent / "server_static"
 MAX_INPUT_CHARS = 2000
 DEFAULT_MAX_NEW_TOKENS = 1024
 DEFAULT_CHUNK_SIZE = 4      # 260ms TTFA; worst observed gap 159ms against a 320ms chunk
@@ -50,6 +55,7 @@ def strip_stage_directions(text: str) -> str:
 class SpeechRequest(BaseModel):
     input: str
     voice: str
+    emotion: Optional[str] = None
     response_format: str = "wav"
     model: str = "qwen3-tts"
     speed: float = 1.0
@@ -74,6 +80,7 @@ class ModelManager:
         self.max_new_tokens = max_new_tokens
         self.sample_rate = registry.sample_rate
         self.ready = False
+        self.error = None
         self._custom = None
         self._base = None
         self._clone_prompts: dict = {}
@@ -97,26 +104,38 @@ class ModelManager:
             dtype=torch.bfloat16, attn_implementation="sdpa", max_seq_len=2048)
         for cfg in self.registry.voices.values():
             if cfg.type == "clone":
-                self._clone_prompts[cfg.key] = self._base.model.create_voice_clone_prompt(
-                    ref_audio=str(cfg.ref_audio), ref_text=cfg.ref_text, x_vector_only_mode=False)
+                for ref in cfg.references:
+                    self._clone_prompts[(cfg.key, ref.id)] = \
+                        self._base.model.create_voice_clone_prompt(
+                            ref_audio=str(ref.audio), ref_text=ref.text,
+                            x_vector_only_mode=False)
         if self._custom is not None:
             cv = next(v for v in self.registry.voices.values() if v.type == "custom")
             self._custom.generate_custom_voice(text="Warmup.", speaker=cv.speaker,
                                                 language=cv.language, max_new_tokens=20)
         any_clone = next((v for v in self.registry.voices.values() if v.type == "clone"), None)
         if any_clone is not None:
+            ref = any_clone.references[0]
             self._base.generate_voice_clone(
                 text="Warmup.", language=any_clone.language,
-                voice_clone_prompt=self._clone_prompts[any_clone.key],
-                ref_text=any_clone.ref_text, max_new_tokens=20)
+                voice_clone_prompt=self._clone_prompts[(any_clone.key, ref.id)],
+                ref_text=ref.text, max_new_tokens=20)
         self.ready = True
         logger.info("Warmup complete — server ready.")
 
     def start_warmup_background(self):
-        threading.Thread(target=lambda: self._run(self._load_and_warm),
-                         name="tts-warmup", daemon=True).start()
+        def run():
+            try:
+                self._run(self._load_and_warm)
+            except BaseException as exc:
+                # Without this the thread dies silently and /health returns a bare 503
+                # forever, which reads identically to "still warming".
+                logger.exception("warmup failed")
+                self.error = f"{type(exc).__name__}: {exc}"
+        threading.Thread(target=run, name="tts-warmup", daemon=True).start()
 
-    def _synthesize_blocking(self, cfg: VoiceConfig, text: str, temperature: float, max_new_tokens: int):
+    def _synthesize_blocking(self, cfg: VoiceConfig, reference: Optional[Reference], text: str,
+                             temperature: float, max_new_tokens: int):
         if cfg.type == "custom":
             wavs, _ = self._custom.generate_custom_voice(
                 text=text, speaker=cfg.speaker, language=cfg.language,
@@ -125,15 +144,17 @@ class ModelManager:
         else:
             wavs, _ = self._base.generate_voice_clone(
                 text=text, language=cfg.language,
-                voice_clone_prompt=self._clone_prompts[cfg.key], ref_text=cfg.ref_text,
+                voice_clone_prompt=self._clone_prompts[(cfg.key, reference.id)],
+                ref_text=reference.text,
                 xvec_only=False, temperature=temperature, max_new_tokens=max_new_tokens)
         return np.asarray(wavs[0], dtype=np.float32)
 
-    def synthesize(self, cfg: VoiceConfig, text: str, temperature: float, max_new_tokens=None):
+    def synthesize(self, cfg: VoiceConfig, reference: Optional[Reference], text: str, temperature: float,
+                   max_new_tokens=None):
         tokens = max_new_tokens if max_new_tokens is not None else self.max_new_tokens
-        return self._run(self._synthesize_blocking, cfg, text, temperature, tokens)
+        return self._run(self._synthesize_blocking, cfg, reference, text, temperature, tokens)
 
-    def synthesize_stream(self, cfg: VoiceConfig, text: str, temperature: float,
+    def synthesize_stream(self, cfg: VoiceConfig, reference: Optional[Reference], text: str, temperature: float,
                           chunk_size: int, max_new_tokens=None,
                           cancel: Optional[threading.Event] = None,
                           instruct: Optional[str] = None):
@@ -164,8 +185,8 @@ class ModelManager:
             def stream():
                 return self._base.generate_voice_clone_streaming(
                     text=text, language=cfg.language,
-                    voice_clone_prompt=self._clone_prompts[cfg.key],
-                    ref_text=cfg.ref_text, xvec_only=False,
+                    voice_clone_prompt=self._clone_prompts[(cfg.key, reference.id)],
+                    ref_text=reference.text, xvec_only=False,
                     temperature=temperature, chunk_size=chunk_size,
                     max_new_tokens=tokens)
         stop = cancel if cancel is not None else threading.Event()
@@ -205,14 +226,89 @@ class ModelManager:
             future.result()
 
 
-def build_app(manager, registry: Registry) -> FastAPI:
+def build_registry(voices_path, characters_path) -> Registry:
+    """Resolve the two flags into one registry.
+
+    The bundled voices.yaml is a default, not a floor: it loads when nothing was asked
+    for, or when it was asked for. `--characters` alone means characters alone, so the
+    lyrebird deployment does not carry media-worker's dubbing voices.
+    """
+    if voices_path is None and characters_path is None:
+        voices_path = DEFAULT_VOICES
+    registry = load_registry(voices_path) if voices_path is not None else None
+    if characters_path is not None:
+        characters = load_characters(characters_path, DEFAULT_TEMPERATURE)
+        registry = characters if registry is None else merge(registry, characters)
+    if not registry.voices:
+        raise ValueError(f"no voices configured (characters_path={characters_path})")
+    return registry
+
+
+def describe_voices(registry: Registry) -> list:
+    """One entry per voice id, in the three shapes a client has to tell apart.
+
+    A character enumerates all ten emotions so the caller can see which ones will fall
+    back; an emotive configured voice lists only what it declares; a flat voice has no
+    emotion axis at all. Counts are reference recordings, and null for custom entries --
+    they have no recordings, and reporting 0 would read as "unavailable".
+    """
+    by_id: dict = {}
+    for cfg in registry.voices.values():
+        by_id.setdefault(cfg.id, []).append(cfg)
+
+    described = []
+    for vid in sorted(by_id):
+        cfgs = by_id[vid]
+        first = cfgs[0]
+        fallback = vid in registry.emotion_fallback_ids
+
+        def count(cfg):
+            return None if cfg.type == "custom" else len(cfg.references)
+
+        if first.emotion is None:
+            emotions = None
+        elif fallback:
+            present = {c.emotion: count(c) for c in cfgs}
+            emotions = {e: present.get(e, 0) for e in EMOTIONS}
+        else:
+            emotions = {c.emotion: count(c) for c in sorted(cfgs, key=lambda c: c.emotion)}
+
+        described.append({
+            "id": vid,
+            "type": first.type,
+            "language": first.language,
+            "default_emotion": registry.defaults.get(vid),
+            "emotion_fallback": fallback,
+            "emotions": emotions,
+        })
+    return described
+
+
+def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
     app = FastAPI(title="faster-qwen3-tts server")
 
     @app.get("/health")
     async def health():
+        if getattr(manager, "error", None):
+            return JSONResponse({"status": "failed", "error": manager.error},
+                                status_code=503)
         if not manager.ready:
             return JSONResponse({"status": "warming"}, status_code=503)
         return {"status": "ok"}
+
+    @app.get("/v1/voices")
+    async def voices():
+        # Deliberately not gated on readiness: this reads the registry, needs no GPU, and
+        # a client should be able to populate its UI during the ~50s warmup.
+        return describe_voices(registry)
+
+    if serve_page:
+        # Only when a character library is configured. "Mount if the file exists" would
+        # be no guard at all -- the file is committed, so the dubbing deployment would
+        # serve an unauthenticated dev page.
+        @app.get("/", response_class=HTMLResponse)
+        async def page():
+            return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
     @app.post("/v1/audio/speech")
     async def speech(req: SpeechRequest):
@@ -226,13 +322,24 @@ def build_app(manager, registry: Registry) -> FastAPI:
         if req.response_format.lower() != "wav":
             raise HTTPException(400, "only response_format='wav' is supported")
         try:
-            cfg = registry.resolve(req.voice)
+            cfg = registry.resolve(req.voice, req.emotion)
         except KeyError as e:
             raise HTTPException(400, str(e))
         temp = req.temperature if req.temperature is not None else cfg.temperature
+        reference = pick_reference(cfg)
         loop = asyncio.get_running_loop()
-        pcm = await loop.run_in_executor(None, manager.synthesize, cfg, text, temp)
-        return Response(content=to_wav_bytes(pcm, manager.sample_rate), media_type="audio/wav")
+        pcm = await loop.run_in_executor(None, manager.synthesize, cfg, reference, text, temp)
+        # The body is raw WAV with no envelope, so what actually got used goes in headers.
+        # A fallback is otherwise invisible: the audio is simply the wrong emotion.
+        headers = {"X-TTS-Voice": cfg.id}
+        if cfg.emotion:
+            headers["X-TTS-Emotion"] = cfg.emotion
+        if req.emotion:
+            headers["X-TTS-Requested-Emotion"] = req.emotion
+        if reference is not None:
+            headers["X-TTS-Reference"] = reference.id
+        return Response(content=to_wav_bytes(pcm, manager.sample_rate),
+                        media_type="audio/wav", headers=headers)
 
     @app.post("/v1/audio/stream")
     async def stream(req: StreamRequest, request: Request):
@@ -255,17 +362,22 @@ def build_app(manager, registry: Registry) -> FastAPI:
         # A free-text instruct overrides the emotion handle's registry string, so the
         # caller can direct a line the persona has no declared handle for.
         instruct = req.instruct if req.instruct is not None else cfg.instruct
+        reference = pick_reference(cfg)
 
         cancel = threading.Event()
         sample_rate = manager.sample_rate
 
         async def frames():
             yield encode_json_frame(FRAME_HEADER, {
-                "sample_rate": sample_rate, "channels": 1, "format": "s16le"})
+                "sample_rate": sample_rate, "channels": 1, "format": "s16le",
+                "voice": cfg.id, "emotion": cfg.emotion,
+                "requested_emotion": req.emotion,
+                "reference": reference.id if reference is not None else None})
             audio_ms = decode_ms = 0.0
             try:
                 chunks = manager.synthesize_stream(
-                    cfg, text, temp, req.chunk_size, cancel=cancel, instruct=instruct)
+                    cfg, reference, text, temp, req.chunk_size, cancel=cancel,
+                    instruct=instruct)
                 async for pcm, timing in iterate_in_threadpool(chunks):
                     if await request.is_disconnected():
                         cancel.set()
@@ -292,10 +404,10 @@ def build_app(manager, registry: Registry) -> FastAPI:
     return app
 
 
-def create_app(voices_path=DEFAULT_VOICES, device="cuda", max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
-               warmup=True) -> FastAPI:
-    registry = load_registry(voices_path)
+def create_app(voices_path=None, characters_path=None, device="cuda",
+               max_new_tokens=DEFAULT_MAX_NEW_TOKENS, warmup=True) -> FastAPI:
+    registry = build_registry(voices_path, characters_path)
     manager = ModelManager(registry, device=device, max_new_tokens=max_new_tokens)
     if warmup:
         manager.start_warmup_background()
-    return build_app(manager, registry)
+    return build_app(manager, registry, serve_page=characters_path is not None)

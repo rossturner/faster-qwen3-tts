@@ -48,7 +48,16 @@ server = [
 ]
 
 [tool.setuptools.package-data]
-faster_qwen3_tts = ["server_voices/*.yaml", "server_voices/*.md", "server_voices/refs/*.wav"]
+faster_qwen3_tts = [
+    "server_voices/*.yaml",
+    "server_voices/*.md",
+    "server_voices/refs/*.wav",
+    "server_voices/characters/*.md",
+    "server_voices/characters/*/*.yaml",
+    "server_voices/characters/*/*/*.wav",
+    "server_voices/characters/*/*/*.txt",
+    "server_static/*.html",
+]
 
 [project.scripts]
 faster-qwen3-tts = "faster_qwen3_tts.cli:main"

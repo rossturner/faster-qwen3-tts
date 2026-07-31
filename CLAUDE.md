@@ -149,14 +149,19 @@ CustomVoice ships **9 fixed speakers** (config IDs are lowercase; pass via `gene
 
 `faster_qwen3_tts/server.py` loads the 1.7B model once, warms the CUDA graphs, and keeps
 it resident. Start it with `faster-qwen3-tts serve-http --voices <voices.yaml>` (defaults:
-`--host 0.0.0.0 --port 8092`, bundled registry). `GET /health` returns 503 while warming
-and 200 once ready — never route traffic before 200. Two endpoints, two consumers:
+`--host 0.0.0.0 --port 8092`, bundled registry). `GET /health` returns 503 while warming,
+`{"status":"failed","error":...}` at 503 if warmup itself threw, and 200 once ready —
+never route traffic before 200. Two endpoints, two consumers:
 
 ### `POST /v1/audio/speech` — whole-file, for media-worker
 
-`{input, voice, response_format:"wav", temperature?}` → one complete 24 kHz mono 16-bit
-WAV. Non-streaming: nothing is emitted until generation finishes, which costs ~1.4 s for
-a single sentence and scales with length. Right for dubbing, wrong for a live loop.
+`{input, voice, emotion?, response_format:"wav", temperature?}` → one complete 24 kHz
+mono 16-bit WAV. The resolved voice, emotion, requested emotion and reference come back
+as `X-TTS-Voice`, `X-TTS-Emotion`, `X-TTS-Requested-Emotion` and `X-TTS-Reference`
+headers (each omitted, not sent empty, when there is nothing to report) — the body has no
+envelope to carry them, and without them an emotion fallback is invisible. Non-streaming:
+nothing is emitted until generation finishes, which costs ~1.4 s for a single sentence and
+scales with length. Right for dubbing, wrong for a live loop.
 
 ### `POST /v1/audio/stream` — framed streaming, for live use
 
@@ -194,11 +199,15 @@ Frame layout is `1 byte type | 4 byte big-endian length | payload`:
 
 | Type | Payload |
 |---|---|
-| `0x01` header | JSON `{sample_rate, channels, format}` |
+| `0x01` header | JSON `{sample_rate, channels, format, voice, emotion, requested_emotion, reference}` |
 | `0x02` audio | raw s16le PCM |
 | `0x03` mark | JSON `{chunk_index, decode_ms, prefill_ms, audio_ms_so_far}` |
 | `0x04` error | JSON `{message}` — failure after the response began |
 | `0x05` end | JSON `{total_audio_ms, total_decode_ms}` |
+
+`emotion` is what was actually used and `requested_emotion` what was asked for; they
+differ when a character's emotion had no recordings and neutral stood in. `reference`
+names the recording chosen for this request, and is null for custom voices.
 
 Framing exists because the HTTP status is committed once the first byte is sent, so a
 mid-stream failure cannot be a 5xx. **A stream that ends without an end frame is a
@@ -248,6 +257,85 @@ reference recording competing with it — see `docs/lyrebird-tts-spike-findings.
 (Experiment 3, Stage B) for the evidence, and for why the designed-voice-with-emotion-clips
 route was abandoned. **No shipped voice uses the emotive form**; it works, and is what a
 persona would use to declare named handles.
+
+### Character reference library
+
+A third voice source, alongside the two registries: a directory tree where a character is
+a directory and an emotion a subdirectory holding interchangeable `.wav`/`.txt` pairs.
+Each request picks one pair at random and clones from it. Load it with
+`serve-http --characters [PATH]`; bare flag uses the bundled
+`faster_qwen3_tts/server_voices/characters`.
+
+```
+characters/nicole/neutral/calm_intro.wav
+characters/nicole/neutral/calm_intro.txt
+characters/nicole/character.yaml          # optional: language, temperature
+```
+
+Characters are discovered by directory name — adding one needs no code or config change.
+The ten emotion names are fixed in `voice_registry.EMOTIONS`: neutral, amused, smug,
+excited, impressed, earnest, deadpan, annoyed, panicked, confused.
+
+**Emotion has to come from the clip** on this path: `instruct` moves only speaking rate on
+an ICL clone, so a reference recording is the only thing that moves pitch and energy. That
+is measured, not assumed — see `docs/lyrebird-tts-spike-findings.md`.
+
+Three request outcomes, deliberately distinct:
+
+- an emotion outside the ten is a **400**
+- one of the ten with no recordings **falls back to neutral**, reported in the response
+  and stream header frame so the fallback is never silent
+- a character with recordings but none under `neutral` is **skipped at startup** — neutral
+  is what everything else falls back to, so without it the character would fail
+  unpredictably per request
+
+Malformed content is logged and skipped, never silently dropped: orphan `.wav` or `.txt`,
+empty transcript, unreadable audio, a directory whose name is not one of the ten, an
+unreadable character directory (e.g. permissions), or a character/emotion/recording name
+that cannot be encoded into an HTTP header — `cfg.id` and `reference.id` are echoed into
+`X-TTS-*` headers, and an unencodable value would raise `UnicodeEncodeError` while building
+the response, surfacing as a bare 500 instead of the real error. The same check applies to
+`voices.yaml`, with the opposite policy: a voice id or emotion name there that fails it is
+**fatal** at load (`ValueError`), because that file is deliberate config and a typo in it
+should not be shrugged off — only filesystem-discovered content gets the skip-and-warn
+treatment.
+
+A character's own `character.yaml` carries the same fatal policy for the same reason —
+it is deliberate content, not filesystem discovery — and an unknown key there takes down
+the **entire** `load_characters()` call, not just that one character, since nothing catches
+it before it leaves the loop.
+
+**`--characters` alone does not load `voices.yaml`.** The bundled registry is a default,
+not a floor — it loads when neither flag is given, or when `--voices` is given. This keeps
+media-worker's deployment from baking clone prompts for a library it never serves, and
+keeps the lyrebird deployment from carrying twelve dubbing voices.
+
+**Warmup bakes one clone prompt per recording**, ~101 ms each (measured, RTX 4090, 1.7B
+Base, bf16). The shipped library holds 149 recordings, so budget ~15 s on top of the model
+load. Pre-baking is deliberate: selection is random, so lazy baking would make early
+requests pay ~101 ms on a ~260 ms TTFA budget until the cache happened to fill. A warmup
+failure is reported by `/health` as `{"status": "failed", "error": ...}`.
+
+### `GET /v1/voices`
+
+Lists every voice, in the three shapes a client must tell apart. Not gated on warmup — it
+reads the registry and needs no GPU, so a UI can populate during startup.
+
+- **character** — all ten emotions with recording counts, `0` meaning it falls back
+- **emotive configured voice** — only its own declared emotion names
+- **flat voice** — `emotions: null`
+
+`emotion_fallback` distinguishes "falls back to neutral" from "cannot be requested". Counts
+are `null` for custom entries, which involve no recordings.
+
+### Audition page
+
+`GET /`, mounted **only when `--characters` is given**, so it never appears on the dubbing
+deployment. Self-contained HTML with no external requests. Pick a character and emotion,
+type a line, and it streams over `/v1/audio/stream` and plays through WebAudio while
+showing TTFA, per-chunk decode time, inter-arrival gap and **playback margin** — delivered
+audio minus elapsed time, the quantity that decides whether playback starves. A chunk that
+arrives too late to schedule cleanly is flagged as an underrun.
 
 ## Gotchas
 

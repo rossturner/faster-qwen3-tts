@@ -115,13 +115,14 @@ def verdict(by_condition: dict[str, list[dict]]) -> dict:
 
 
 def run_clone(model, prompt, cfg) -> dict:
+    reference = cfg.references[0]
     results = {}
     for name, instruct in CONDITIONS.items():
         runs = []
         for i in range(RUNS):
             wavs, sr = model.generate_voice_clone(
                 text=TEXT, language=cfg.language, voice_clone_prompt=prompt,
-                ref_text=cfg.ref_text, xvec_only=False, instruct=instruct,
+                ref_text=reference.text, xvec_only=False, instruct=instruct,
                 temperature=TEMPERATURE)
             audio = np.asarray(wavs[0], dtype=np.float32)
             runs.append(measure(audio, sr, len(TEXT)))
@@ -185,8 +186,9 @@ def main() -> None:
     model = FasterQwen3TTS.from_pretrained(
         "Qwen/Qwen3-TTS-12Hz-1.7B-Base", device="cuda", dtype=torch.bfloat16,
         attn_implementation="sdpa", max_seq_len=2048)
+    reference = cfg.references[0]
     prompt = model.model.create_voice_clone_prompt(
-        ref_audio=str(cfg.ref_audio), ref_text=cfg.ref_text, x_vector_only_mode=False)
+        ref_audio=str(reference.audio), ref_text=reference.text, x_vector_only_mode=False)
 
     print(f"clone path ({VOICE_ID}, ICL), {RUNS} runs x {len(CONDITIONS)} conditions:")
     clone = run_clone(model, prompt, cfg)

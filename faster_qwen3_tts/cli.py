@@ -307,9 +307,11 @@ def cmd_serve(args):
 
 def cmd_serve_http(args):
     import uvicorn
-    from faster_qwen3_tts.server import create_app, DEFAULT_VOICES
-    app = create_app(voices_path=args.voices or DEFAULT_VOICES, device=args.device,
-                     max_new_tokens=args.max_new_tokens, warmup=True)
+    from faster_qwen3_tts.server import DEFAULT_CHARACTERS, create_app
+    if args.characters == "BUNDLED":
+        args.characters = DEFAULT_CHARACTERS
+    app = create_app(voices_path=args.voices, characters_path=args.characters,
+                     device=args.device, max_new_tokens=args.max_new_tokens, warmup=True)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
@@ -406,6 +408,9 @@ def build_parser():
     sp.add_argument("--host", default="0.0.0.0")
     sp.add_argument("--port", type=int, default=8092)
     sp.add_argument("--voices", default=None, help="Path to voices.yaml (default: bundled)")
+    sp.add_argument("--characters", nargs="?", const="BUNDLED", default=None,
+                    help="Character library directory; bare flag uses the bundled one. "
+                         "Given alone, voices.yaml is not loaded.")
     sp.add_argument("--max-new-tokens", type=int, default=1024)
     sp.set_defaults(fn=cmd_serve_http)
 
