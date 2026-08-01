@@ -20,3 +20,6 @@ build/
 *.egg-info/
 .idea/
 spikes/emotion/out/
+/.playwright-mcp/
+spikes/billy_filter/out/
+spikes/billy_filter/ltas.npz
