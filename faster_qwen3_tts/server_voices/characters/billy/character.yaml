@@ -1,0 +1,26 @@
+language: English
+
+# Billy Kid is a cyborg and his in-game voice carries a doubling effect. His reference
+# recordings here are the GoldenMechaGodBattle assets, which are the same performer with
+# the effect NOT applied, so it has to be reapplied after synthesis or he sounds like an
+# ordinary man.
+#
+# Settled by ear against the game audio: two copies were preferred over one, and both the
+# detune and the delay were needed -- either alone lost. Detune was indistinguishable
+# anywhere between 12 and 80 cents, delay was clearly wrong by 22 ms, and the mix was the
+# only axis that moved audibly, so 26/8-16 are weakly determined and 0.55 is not.
+#
+# The window is in MILLISECONDS, not samples. It was chosen at 48 kHz; expressed as a
+# sample count it would be a different filter at the server's 24 kHz -- and was, until
+# this was fixed: 2048 samples is 42.7 ms at 48 kHz and 85.3 ms at 24 kHz, and the longer
+# one was rejected by ear as too far apart.
+filter:
+  type: chorus
+  cents: [26, -26]
+  delays_ms: [8, 16]
+  amount: 0.55
+  window_ms: 42.7
+  # The chorus is not loudness-neutral -- the pitch-shifted copies are decorrelated, so
+  # the mix sums as power, not amplitude, costing a measured 5.66 dB. Without this Billy
+  # is audibly quieter than the unfiltered characters beside him.
+  makeup_db: 5.7
