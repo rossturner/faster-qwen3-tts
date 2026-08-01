@@ -316,6 +316,86 @@ load. Pre-baking is deliberate: selection is random, so lazy baking would make e
 requests pay ~101 ms on a ~260 ms TTFA budget until the cache happened to fill. A warmup
 failure is reported by `/health` as `{"status": "failed", "error": ...}`.
 
+### Per-character audio filters
+
+Full narrative — what was tried, what failed, and how firmly each value is determined —
+in [`docs/billy-voice-filter.md`](docs/billy-voice-filter.md). **Read it before changing
+any of these numbers**; several are weakly determined and several plausible approaches
+were tried and rejected.
+
+A character whose source material is processed needs that processing reapplied, or the
+clone sounds like an ordinary person. Billy Kid is a cyborg with a doubling effect on his
+in-game voice; his references here are the `GoldenMechaGodBattle` assets, which are the
+same performer with the effect *not* applied. He declares the filter in `character.yaml`:
+
+```yaml
+filter:
+  type: chorus
+  cents: [26, -26]      # one entry per copy
+  delays_ms: [8, 16]    # one delay per copy, same length as cents
+  amount: 0.55          # wet/dry
+  window_ms: 42.7       # vocoder window; sets the latency
+  makeup_db: 5.7        # restores the level the mix loses
+```
+
+**`makeup_db` is not optional polish.** The copies are pitch-shifted, so they are
+decorrelated from the dry and from each other: the mix sums as power rather than
+amplitude and loses a measured **5.66 dB** even though nothing is attenuated. Without it
+Billy is audibly quieter than the unfiltered characters beside him. It is a declared
+constant for a *particular* `amount`, not derived from it — **change one and re-measure
+the other**. A memoryless soft knee above 0.9 catches the few samples the makeup pushes
+past full scale (0.001–0.003%, peaking at 1.16), since the chorus raises crest factor as
+well as lowering RMS.
+
+**`window_ms` is a duration, not a sample count, and that distinction is load-bearing.**
+The window's audible effect is how much the vocoder smears in time, so a fixed `n_fft`
+is a different filter at every sample rate: 2048 samples is 42.7 ms at 48 kHz but 85.3 ms
+at 24 kHz. Both were auditioned and heard as different settings -- 42.7 ms was chosen and
+85.3 ms rejected as "too far apart" -- and the server shipped the rejected one until this
+was expressed in milliseconds.
+
+Discovered like everything else about characters, so adding another processed character
+needs no code change. A malformed block is **fatal** at load, like every other
+`character.yaml` error -- it is deliberate config, not filesystem discovery.
+
+**Applied after synthesis, never baked into the references.** Baking it in would ask the
+model to reproduce a chorus as *timbre*, which it renders inconsistently take to take --
+the same failure as cloning from already-processed audio. Downstream it is deterministic
+and identical every request.
+
+The chorus is two pitch-shifted copies mixed against the dry through fixed delay lines.
+Pitch shifting is phase-vocoder time-stretch then fractional resample, which scales the
+whole spectrum including formants so each copy reads as a slightly different voice.
+Shifting FFT bins instead approximately preserves formants and audibly sounds flatter, so
+the two-stage form is load-bearing. Both stages carry state, so **chunked and whole-file
+output are sample identical** and the filter is applied on both endpoints. `flush()` at
+end of stream releases the held window; without it the last 85 ms of every line is lost.
+
+**Latency is one window -- 42.7 ms -- but it is mostly not charged to TTFA**,
+because a decoded chunk is normally longer than the window, so the filter still emits on
+the first chunk. Measured against unfiltered `nicole`, same line, over HTTP:
+
+| `chunk_size` | chunk audio | TTFA penalty |
+|---|---|---|
+| 1 | 83.3 ms | see below |
+| 2 | 166.7 ms | +3 ms |
+| **4 (default)** | 333.3 ms | **+10 ms** |
+| 8 | 666.7 ms | +18 ms |
+
+Those were measured at the earlier 85.3 ms window, where `chunk_size=1` was a cliff
+(+363 ms): an 83.3 ms chunk was just *under* the window, so the first chunk emitted
+nothing and TTFA waited for the next. At 42.7 ms every chunk size clears the window, so
+the cliff is gone -- but re-measure before relying on `chunk_size=1`. CPU is ~1 ms per
+chunk, well under 2% of realtime.
+
+The settings were chosen by ear against the game audio over several rounds. Two copies
+beat one; detune and delay were both needed, either alone lost. Detune was
+indistinguishable anywhere from 12 to 80 cents and delay only clearly wrong by 22 ms, so
+**26 cents and 8/16 ms are weakly determined**; `amount` was the only axis that moved
+audibly, and 0.55 is firm. Earlier attempts to derive the filter by measuring dry against
+processed game audio failed: the two sets are different takes by the same actor, so the
+spectral difference was mostly performance, not effect.
+
 ### `GET /v1/voices`
 
 Lists every voice, in the three shapes a client must tell apart. Not gated on warmup — it
