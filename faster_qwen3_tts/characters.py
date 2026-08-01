@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import soundfile as sf
 import yaml
 
+from .audio_filter import ChorusSpec
 from .voice_registry import EMOTIONS, Reference, Registry, VoiceConfig, _is_safe_header_value
 
 logger = logging.getLogger(__name__)
@@ -35,20 +36,24 @@ SAMPLE_RATE = 24000
 MIN_REFERENCE_SECONDS = 2.0
 MAX_REFERENCE_SECONDS = 30.0
 
-_CHARACTER_YAML_KEYS = {"language", "temperature"}
+_CHARACTER_YAML_KEYS = {"language", "temperature", "filter"}
 
 
-def _read_character_yaml(path: Path, default_temperature: float) -> Tuple[str, float]:
+def _read_character_yaml(path: Path, default_temperature: float
+                          ) -> Tuple[str, float, Optional[ChorusSpec]]:
     if not path.is_file():
-        return DEFAULT_LANGUAGE, default_temperature
+        return DEFAULT_LANGUAGE, default_temperature, None
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     unknown = set(data) - _CHARACTER_YAML_KEYS
     if unknown:
         raise ValueError(
             f"{path}: unknown key(s) {sorted(unknown)}; "
             f"allowed: {sorted(_CHARACTER_YAML_KEYS)}")
+    raw = data.get("filter")
+    audio_filter = ChorusSpec.from_config(raw, str(path)) if raw else None
     return (data.get("language", DEFAULT_LANGUAGE),
-            float(data.get("temperature", default_temperature)))
+            float(data.get("temperature", default_temperature)),
+            audio_filter)
 
 
 def _read_references(emotion_dir: Path) -> Tuple[Reference, ...]:
@@ -107,7 +112,7 @@ def load_characters(root, default_temperature: float,
                 char_dir)
             continue
         try:
-            language, temperature = _read_character_yaml(
+            language, temperature, audio_filter = _read_character_yaml(
                 char_dir / "character.yaml", default_temperature)
 
             for sub in sorted(p for p in char_dir.iterdir() if p.is_dir()):
@@ -141,7 +146,8 @@ def load_characters(root, default_temperature: float,
 
         for emotion, references in found.items():
             cfg = VoiceConfig(cid, "clone", language, temperature,
-                               references=references, emotion=emotion)
+                               references=references, emotion=emotion,
+                               audio_filter=audio_filter)
             voices[cfg.key] = cfg
         defaults[cid] = "neutral"
         fallback_ids.add(cid)

@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import yaml
 
+from .audio_filter import ChorusSpec
+
 DEFAULT_TEMPERATURE = 0.7
 
 _UNSAFE_HEADER_CHARS = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
@@ -53,6 +55,8 @@ class VoiceConfig:
     instruct: Optional[str] = None
     references: tuple[Reference, ...] = ()
     emotion: Optional[str] = None
+    # Reapplied after synthesis for characters whose source material is processed.
+    audio_filter: Optional[ChorusSpec] = None
 
     @property
     def key(self) -> str:

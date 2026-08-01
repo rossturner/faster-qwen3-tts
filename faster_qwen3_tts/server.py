@@ -329,6 +329,9 @@ def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
         reference = pick_reference(cfg)
         loop = asyncio.get_running_loop()
         pcm = await loop.run_in_executor(None, manager.synthesize, cfg, reference, text, temp)
+        if cfg.audio_filter is not None:
+            pcm = await loop.run_in_executor(
+                None, cfg.audio_filter.build(manager.sample_rate).apply, pcm)
         # The body is raw WAV with no envelope, so what actually got used goes in headers.
         # A fallback is otherwise invisible: the audio is simply the wrong emotion.
         headers = {"X-TTS-Voice": cfg.id}
@@ -374,6 +377,8 @@ def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
                 "requested_emotion": req.emotion,
                 "reference": reference.id if reference is not None else None})
             audio_ms = decode_ms = 0.0
+            # Per request: the filter is stateful, so one instance must not be shared.
+            chorus = cfg.audio_filter.build(sample_rate) if cfg.audio_filter else None
             try:
                 chunks = manager.synthesize_stream(
                     cfg, reference, text, temp, req.chunk_size, cancel=cancel,
@@ -382,15 +387,26 @@ def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
                     if await request.is_disconnected():
                         cancel.set()
                         return
-                    audio_ms += len(pcm) / sample_rate * 1000
+                    if chorus is not None:
+                        # The filter holds back one window, so early chunks emit
+                        # nothing. Skip the frame rather than send an empty one.
+                        pcm = chorus.process(pcm)
                     decode_ms += float(timing.get("decode_ms", 0.0))
-                    yield encode_frame(FRAME_AUDIO, to_pcm16(pcm))
+                    if len(pcm):
+                        audio_ms += len(pcm) / sample_rate * 1000
+                        yield encode_frame(FRAME_AUDIO, to_pcm16(pcm))
                     yield encode_json_frame(FRAME_MARK, {
                         "chunk_index": timing.get("chunk_index"),
                         "decode_ms": timing.get("decode_ms"),
                         "prefill_ms": timing.get("prefill_ms"),
                         "audio_ms_so_far": round(audio_ms, 2),
                     })
+                if chorus is not None:
+                    # Without this the last window of every line is silently lost.
+                    tail = chorus.flush()
+                    if len(tail):
+                        audio_ms += len(tail) / sample_rate * 1000
+                        yield encode_frame(FRAME_AUDIO, to_pcm16(tail))
                 yield encode_json_frame(FRAME_END, {
                     "total_audio_ms": round(audio_ms, 2),
                     "total_decode_ms": round(decode_ms, 2)})
