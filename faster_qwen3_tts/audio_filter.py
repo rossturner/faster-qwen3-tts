@@ -62,7 +62,7 @@ class ChorusSpec:
     """Declarative chorus settings. Defaults are Billy's, settled by ear."""
     cents: Tuple[float, ...] = (26.0, -26.0)
     delays_ms: Tuple[float, ...] = (8.0, 16.0)
-    amount: float = 0.55
+    amount: float = 0.50
     # In milliseconds, NOT samples. The window's audible effect -- how much the vocoder
     # smears in time -- is a duration, so a fixed sample count means a different filter
     # at every sample rate. 2048 samples is 42.7 ms at 48 kHz but 85.3 ms at 24 kHz, and
@@ -78,7 +78,7 @@ class ChorusSpec:
     # Content-dependent (-5.1 dB on a harmonic probe, -6.0 on noise), so it is declared
     # rather than auto-calibrated. Re-measure if `amount` or the copy count changes:
     # spikes/billy_filter/ has the script.
-    makeup_db: float = 5.7
+    makeup_db: float = 5.09
 
     @classmethod
     def from_config(cls, data: Dict[str, Any], where: str) -> "ChorusSpec":

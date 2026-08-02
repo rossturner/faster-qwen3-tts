@@ -76,7 +76,7 @@ def test_makeup_is_declared_not_derived_from_amount():
     amount. Changing amount without re-measuring makeup leaves the voice mismatched, so
     the two must be edited together."""
     quiet = StreamingChorus(24000, ChorusSpec(amount=0.05))
-    assert quiet.makeup == pytest.approx(10 ** (5.7 / 20), abs=1e-6), \
+    assert quiet.makeup == pytest.approx(10 ** (5.09 / 20), abs=1e-6), \
         "makeup does not track amount; character.yaml must set both"
 
 
@@ -156,9 +156,9 @@ def test_character_yaml_declares_the_filter(tmp_path):
     root = _character(tmp_path, yaml.safe_dump(
         {"language": "English",
          "filter": {"type": "chorus", "cents": [26, -26], "delays_ms": [8, 16],
-                    "amount": 0.55, "window_ms": 42.7, "makeup_db": 5.7}}))
+                    "amount": 0.50, "window_ms": 42.7, "makeup_db": 5.09}}))
     cfg = load_characters(root, 0.7).resolve("billy", "neutral")
-    assert cfg.audio_filter == ChorusSpec((26.0, -26.0), (8.0, 16.0), 0.55, 42.7, 5.7)
+    assert cfg.audio_filter == ChorusSpec((26.0, -26.0), (8.0, 16.0), 0.50, 42.7, 5.09)
 
 
 def test_a_character_without_a_filter_gets_none(tmp_path):
@@ -178,5 +178,5 @@ def test_shipped_billy_declares_the_settled_filter():
     p = (Path(__file__).resolve().parents[1] / "faster_qwen3_tts" / "server_voices" /
          "characters" / "billy" / "character.yaml")
     spec = ChorusSpec.from_config(yaml.safe_load(p.read_text())["filter"], str(p))
-    assert spec == ChorusSpec((26.0, -26.0), (8.0, 16.0), 0.55, 42.7, 5.7)
+    assert spec == ChorusSpec((26.0, -26.0), (8.0, 16.0), 0.50, 42.7, 5.09)
     assert spec.n_fft(24000) == 1024, "the server runs at 24 kHz"

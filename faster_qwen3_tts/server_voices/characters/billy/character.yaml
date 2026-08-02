@@ -8,7 +8,12 @@ language: English
 # Settled by ear against the game audio: two copies were preferred over one, and both the
 # detune and the delay were needed -- either alone lost. Detune was indistinguishable
 # anywhere between 12 and 80 cents, delay was clearly wrong by 22 ms, and the mix was the
-# only axis that moved audibly, so 26/8-16 are weakly determined and 0.55 is not.
+# only axis that moved audibly, so 26/8-16 are weakly determined and the amount is not.
+#
+# Toned from 0.55 to 0.50 on a later listen. That round also established that the other
+# two axes are exhausted: changing the detune was reported as doing the same thing as
+# changing the amount, and delays from 4 to 8 ms were indistinguishable. Amount is the
+# only knob worth reaching for.
 #
 # The window is in MILLISECONDS, not samples. It was chosen at 48 kHz; expressed as a
 # sample count it would be a different filter at the server's 24 kHz -- and was, until
@@ -18,9 +23,9 @@ filter:
   type: chorus
   cents: [26, -26]
   delays_ms: [8, 16]
-  amount: 0.55
+  amount: 0.50
   window_ms: 42.7
   # The chorus is not loudness-neutral -- the pitch-shifted copies are decorrelated, so
-  # the mix sums as power, not amplitude, costing a measured 5.66 dB. Without this Billy
+  # the mix sums as power, not amplitude, costing a measured 5.09 dB at this amount. Without this Billy
   # is audibly quieter than the unfiltered characters beside him.
-  makeup_db: 5.7
+  makeup_db: 5.09

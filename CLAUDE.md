@@ -333,14 +333,14 @@ filter:
   type: chorus
   cents: [26, -26]      # one entry per copy
   delays_ms: [8, 16]    # one delay per copy, same length as cents
-  amount: 0.55          # wet/dry
+  amount: 0.50          # wet/dry
   window_ms: 42.7       # vocoder window; sets the latency
-  makeup_db: 5.7        # restores the level the mix loses
+  makeup_db: 5.09       # restores the level the mix loses
 ```
 
 **`makeup_db` is not optional polish.** The copies are pitch-shifted, so they are
 decorrelated from the dry and from each other: the mix sums as power rather than
-amplitude and loses a measured **5.66 dB** even though nothing is attenuated. Without it
+amplitude and loses a measured **5.09 dB** even though nothing is attenuated. Without it
 Billy is audibly quieter than the unfiltered characters beside him. It is a declared
 constant for a *particular* `amount`, not derived from it — **change one and re-measure
 the other**. A memoryless soft knee above 0.9 catches the few samples the makeup pushes
@@ -392,7 +392,7 @@ The settings were chosen by ear against the game audio over several rounds. Two 
 beat one; detune and delay were both needed, either alone lost. Detune was
 indistinguishable anywhere from 12 to 80 cents and delay only clearly wrong by 22 ms, so
 **26 cents and 8/16 ms are weakly determined**; `amount` was the only axis that moved
-audibly, and 0.55 is firm. Earlier attempts to derive the filter by measuring dry against
+audibly, and 0.50 is firm. Earlier attempts to derive the filter by measuring dry against
 processed game audio failed: the two sets are different takes by the same actor, so the
 spectral difference was mostly performance, not effect.
 

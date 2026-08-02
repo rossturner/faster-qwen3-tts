@@ -95,25 +95,32 @@ filter:
   type: chorus
   cents: [26, -26]
   delays_ms: [8, 16]
-  amount: 0.55
+  amount: 0.50
   window_ms: 42.7
-  makeup_db: 5.7
+  makeup_db: 5.09
 ```
 
 | Parameter | Confidence |
 |---|---|
 | Two copies, not one | **firm** — a single copy lost cleanly |
 | Both detune and delay present | **firm** — each alone lost |
-| `amount: 0.55` | **firm** — the only axis that moved audibly; 0.40 was too dry, 0.70 too much |
+| `amount: 0.50` | **firm** — the only axis that ever moved audibly; 0.40 too dry, 0.70 too much, toned from 0.55 on a later listen |
 | `cents: [26, -26]` | **weak** — indistinguishable anywhere from 12 to 80 cents |
 | `delays_ms: [8, 16]` | **weak** — 22 ms was clearly too far, 2 ms acceptable, nothing in between separable |
 | `window_ms: 42.7` | **firm** — 21 ms flatter, 85 ms "too far apart" |
-| `makeup_db: 5.7` | **firm** — measured, restores level to within 0.04 dB |
+| `makeup_db: 5.09` | **firm** — measured for `amount: 0.50`; restores level to within 0.01 dB |
 
 The weakly-determined values are a real finding, not a gap. Across a 4× change in detune
 the residual-difference metric moved by less than 0.5 dB, which matches the difficulty of
 hearing it. Do not treat 26 and 8/16 as tuned constants; do not "improve" them without a
 listening test that can actually resolve them.
+
+**Both other axes are exhausted.** A later round swept detune and delay again, level-
+matched, across four emotions. Changing the detune was reported as doing the same thing as
+changing the amount — the two are perceptually redundant, which fits detune being
+indistinguishable from 12 to 80 cents — and delays from 4 to 8 ms could not be told apart
+at all. `amount` is the only knob worth reaching for; the other two have now failed to
+separate twice.
 
 **A note on metrics.** Correlation against the reference implementation scored +0.73–0.75
 for versions that sounded clearly wrong *and* versions that sounded right. It never once
@@ -155,13 +162,14 @@ two were indistinguishable by ear, and cubic is 3.4× cheaper.
 
 The copies are pitch-shifted, so they are decorrelated from the dry and from each other.
 The mix therefore sums as **power, not amplitude**, and loses level even though nothing is
-attenuated. Measured over seven real clones: **−5.66 dB** RMS, tight (−5.44 to −5.93),
-against −4.51 dB predicted by decorrelation alone — the delay lines decorrelate further.
+attenuated. Measured at `amount: 0.50` over four clones: **−5.09 dB** RMS, tight (−4.86 to −5.21).
+Decorrelation alone predicts less; the delay lines decorrelate further. It scales steeply
+with `amount` — 4.01 dB at 0.40, 5.61 dB at 0.55 — which is why the two must move together.
 
 Reported from listening as Billy being quieter than the other characters, which is exactly
 what it is: he sits next to unfiltered voices, so any level change shows.
 
-`makeup_db: 5.7` restores it, measured back to within **0.04 dB** mean (worst ±0.26 dB).
+`makeup_db: 5.09` restores it, measured back to within **0.01 dB** mean.
 Two properties worth knowing:
 
 - **It is declared, not derived.** The loss is content-dependent (−5.1 dB on a harmonic
