@@ -398,3 +398,57 @@ def test_bundled_pronunciations_file_loads_and_covers_shipped_names():
     # The short form must not fire inside the long one; the letter lookbehind is what
     # stops it, and a key added later without that boundary would break this silently.
     assert p.apply("New Eridu") == p.apply("New Eridu").replace("Reedoo", "")
+
+
+def _clone_registry(ref_wav: Path):
+    return Registry(24000, {
+        "c": VoiceConfig("c", "clone", "English", 0.7,
+                         references=(Reference("r", ref_wav, "hello there"),)),
+    })
+
+
+def _write_ref_wav(path: Path, seconds=1.0, sr=48000):
+    n = int(seconds * sr)
+    tone = (np.sin(np.arange(n) * 0.05) * 8000).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+        w.writeframes(tone.tobytes())
+    return sr, n
+
+
+def test_warmup_bakes_clone_prompts_from_silence_padded_reference(monkeypatch, tmp_path):
+    """The ICL prompt ends on the reference's last codec token, so without a trailing
+    pad the first generated token is conditioned on the reference's final phoneme --
+    see FasterQwen3TTS._load_ref_audio_with_silence. Passing the bare path to upstream's
+    create_voice_clone_prompt skips that pad silently, which is what this pins.
+    """
+    import faster_qwen3_tts
+    from faster_qwen3_tts.model import FasterQwen3TTS
+    from faster_qwen3_tts.server import ModelManager
+
+    ref = tmp_path / "ref.wav"
+    sr, n = _write_ref_wav(ref)
+    seen = {}
+
+    class StubInner:
+        def create_voice_clone_prompt(self, ref_audio, ref_text, **kw):
+            seen["ref_audio"] = ref_audio; seen["ref_text"] = ref_text
+            return [object()]
+
+    class StubModel:
+        model = StubInner()
+        _load_ref_audio_with_silence = FasterQwen3TTS._load_ref_audio_with_silence
+        @classmethod
+        def from_pretrained(cls, *a, **k): return cls()
+        def generate_voice_clone(self, **k): return ([np.zeros(10, np.float32)], 24000)
+
+    monkeypatch.setattr(faster_qwen3_tts, "FasterQwen3TTS", StubModel)
+    ModelManager(_clone_registry(ref))._load_and_warm()
+
+    audio = seen["ref_audio"]
+    assert isinstance(audio, tuple), f"expected (waveform, sr), got {type(audio)}"
+    wav, got_sr = audio
+    assert got_sr == sr
+    pad = int(0.5 * sr)
+    assert len(wav) == n + pad, "reference was not padded with 0.5s of silence"
+    assert not np.any(wav[-pad:]), "the appended tail is not silent"

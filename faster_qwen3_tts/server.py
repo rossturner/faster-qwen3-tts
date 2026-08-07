@@ -107,9 +107,16 @@ class ModelManager:
         for cfg in self.registry.voices.values():
             if cfg.type == "clone":
                 for ref in cfg.references:
+                    # Pad before encoding, exactly as the fork's own ICL path does. The
+                    # prompt ends on the reference's last codec token, so an unpadded
+                    # clip conditions the first generated token on its final phoneme.
+                    # Pre-baking here reaches past generate_voice_clone, so passing the
+                    # bare path would skip the pad and nothing would say so.
+                    padded = self._base._load_ref_audio_with_silence(
+                        ref.audio, silence_secs=0.5)
                     self._clone_prompts[(cfg.key, ref.id)] = \
                         self._base.model.create_voice_clone_prompt(
-                            ref_audio=str(ref.audio), ref_text=ref.text,
+                            ref_audio=padded, ref_text=ref.text,
                             x_vector_only_mode=False)
         if self._custom is not None:
             cv = next(v for v in self.registry.voices.values() if v.type == "custom")
