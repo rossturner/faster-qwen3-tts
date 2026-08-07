@@ -21,6 +21,7 @@ from .stream_frames import (
     encode_frame, encode_json_frame,
 )
 from .characters import load_characters
+from .pronunciations import EMPTY as NO_PRONUNCIATIONS, Pronouncer, load_pronunciations
 from .voice_registry import (
     DEFAULT_TEMPERATURE, EMOTIONS, Reference, Registry, VoiceConfig, load_registry, merge, pick_reference,
 )
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_VOICES = Path(__file__).parent / "server_voices" / "voices.yaml"
 DEFAULT_CHARACTERS = Path(__file__).parent / "server_voices" / "characters"
+DEFAULT_PRONUNCIATIONS = Path(__file__).parent / "server_voices" / "pronunciations.yaml"
 STATIC_DIR = Path(__file__).parent / "server_static"
 MAX_INPUT_CHARS = 2000
 DEFAULT_MAX_NEW_TOKENS = 1024
@@ -284,7 +286,8 @@ def describe_voices(registry: Registry) -> list:
     return described
 
 
-def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
+def build_app(manager, registry: Registry, serve_page: bool = False,
+              pronouncer: Pronouncer = NO_PRONUNCIATIONS) -> FastAPI:
     app = FastAPI(title="faster-qwen3-tts server")
 
     @app.get("/health")
@@ -319,6 +322,9 @@ def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
             raise HTTPException(400, "'input' is empty")
         if len(text) > MAX_INPUT_CHARS:
             raise HTTPException(400, f"'input' exceeds {MAX_INPUT_CHARS} chars; chunk upstream")
+        # After the bound, not before: MAX_INPUT_CHARS guards prefill against what the
+        # caller sent, and a respelling can lengthen the text.
+        text = pronouncer.apply(text)
         if req.response_format.lower() != "wav":
             raise HTTPException(400, "only response_format='wav' is supported")
         try:
@@ -352,7 +358,7 @@ def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
             raise HTTPException(503, "Model warming up")
         if len(req.input) > MAX_INPUT_CHARS:
             raise HTTPException(400, f"'input' exceeds {MAX_INPUT_CHARS} chars; chunk upstream")
-        text = strip_stage_directions(req.input)
+        text = pronouncer.apply(strip_stage_directions(req.input))
         if not text:
             raise HTTPException(400, "'input' is empty")
         if not 1 <= req.chunk_size <= MAX_CHUNK_SIZE:
@@ -421,9 +427,15 @@ def build_app(manager, registry: Registry, serve_page: bool = False) -> FastAPI:
 
 
 def create_app(voices_path=None, characters_path=None, device="cuda",
-               max_new_tokens=DEFAULT_MAX_NEW_TOKENS, warmup=True) -> FastAPI:
+               max_new_tokens=DEFAULT_MAX_NEW_TOKENS, warmup=True,
+               pronunciations_path=None) -> FastAPI:
     registry = build_registry(voices_path, characters_path)
+    # None means no dictionary, matching voices_path/characters_path: the bundled table
+    # is opt-in so the dubbing deployment does not inherit lyrebird's respellings.
+    pronouncer = (load_pronunciations(pronunciations_path)
+                  if pronunciations_path is not None else NO_PRONUNCIATIONS)
     manager = ModelManager(registry, device=device, max_new_tokens=max_new_tokens)
     if warmup:
         manager.start_warmup_background()
-    return build_app(manager, registry, serve_page=characters_path is not None)
+    return build_app(manager, registry, serve_page=characters_path is not None,
+                     pronouncer=pronouncer)

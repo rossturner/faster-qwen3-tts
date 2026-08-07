@@ -203,9 +203,11 @@ def _stream_registry():
                     {"nicole": "neutral"})
 
 
-def _stream_client(manager=None):
+def _stream_client(manager=None, pronouncer=None):
+    from faster_qwen3_tts.pronunciations import EMPTY
     mgr = manager or FakeStreamManager()
-    return TestClient(build_app(mgr, _stream_registry())), mgr
+    return TestClient(build_app(mgr, _stream_registry(),
+                                pronouncer=pronouncer or EMPTY)), mgr
 
 
 def _frames(response):
@@ -362,3 +364,20 @@ def test_stream_503_when_warming():
     c, _ = _stream_client(mgr)
     assert c.post("/v1/audio/stream",
                   json={"input": "hi", "voice": "nicole"}).status_code == 503
+
+
+from faster_qwen3_tts.pronunciations import Pronouncer
+
+
+def test_stream_applies_pronunciations_before_synthesis():
+    c, mgr = _stream_client(pronouncer=Pronouncer((("Anby", "Anbee"),)))
+    r = c.post("/v1/audio/stream", json={"input": "Hey Anby!", "voice": "nicole"})
+    assert r.status_code == 200
+    assert mgr.calls[-1][1] == "Hey Anbee!"
+
+
+def test_stream_pronunciations_run_after_stage_directions_are_stripped():
+    c, mgr = _stream_client(pronouncer=Pronouncer((("Anby", "Anbee"),)))
+    c.post("/v1/audio/stream",
+           json={"input": "*waves* Anby is here", "voice": "nicole"})
+    assert mgr.calls[-1][1] == "Anbee is here"

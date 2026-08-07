@@ -1,0 +1,16 @@
+# faster_qwen3_tts/server_voices/pronunciations.yaml
+#
+# Respellings applied to request text before synthesis. Qwen3-TTS has no pronunciation
+# control -- no lexicon, no phonemes, no SSML -- so the spelling of the input is the only
+# lever, and it has to change letters: capitalisation and punctuation are measured inert.
+#
+# Loaded only when serve-http is given --pronunciations. Matching is case-insensitive and
+# whole-word; the replacement is emitted exactly as written here.
+#
+# NOT AUDITIONED. These are first-principles guesses at spellings the model will read as
+# AN-bee and de-MAH-ra (Japanese アンビー・デマラ, Chinese 安比・德玛拉 / Ānbǐ Démǎlā).
+# Nobody has heard the model say either name. If it already says "Anby" correctly then
+# this file makes it worse -- only ears can tell, so change these freely.
+pronunciations:
+  Anby: "Anbee"
+  Demara: "Demarra"

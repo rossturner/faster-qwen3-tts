@@ -396,6 +396,72 @@ audibly, and 0.50 is firm. Earlier attempts to derive the filter by measuring dr
 processed game audio failed: the two sets are different takes by the same actor, so the
 spectral difference was mostly performance, not effect.
 
+### Pronunciation dictionary
+
+Qwen3-TTS has no pronunciation control: no G2P frontend, no lexicon, no phoneme or IPA
+input, no SSML. The upstream package has no phonemiser and the tokenizer's 33 added
+tokens are all plumbing; text goes verbatim into the chat template. So the only lever on
+how a word is said is how it is **spelled**, and it has to change letters — typography
+(ALL CAPS, ellipses, em-dash) is measured inert.
+
+`server_voices/pronunciations.yaml` is a flat table of respellings, applied to `input` on
+**both** synthesis endpoints immediately before synthesis:
+
+```yaml
+pronunciations:
+  Anby: "Anbee"
+  Demara: "Demarra"
+```
+
+**Opt-in**, via `serve-http --pronunciations` — bare flag for the bundled table, or a
+path. Omitted, nothing is rewritten. Opt-in rather than default so media-worker's dubbing
+deployment does not inherit lyrebird's respellings, the same reasoning as `--characters`.
+
+Matching is case-insensitive and the replacement is emitted **verbatim**, so `ANBY`
+becomes `Anbee` — preserving the caller's capitalisation would be work spent on something
+the model ignores. Whole-word, where "word" is bounded by **Latin script** rather than
+`\b` or `[A-Za-z]`: `\b` would not match `Anbyさん`, because CJK characters are word
+characters, and a bare ASCII class would rewrite inside `Anaïs`. Both matter — this server
+serves Japanese and Korean *and* French, Spanish, German, Portuguese and Italian. Digits
+are not boundaries (`Anby2` → `Anbee2`); apostrophes are (`Anby's` → `Anbee's`).
+
+Applied in **one pass** over one compiled alternation, so one rule's output can never be
+re-matched by another. Keys are `re.escape`d, and the lookup falls back to the matched
+text — under `IGNORECASE`, `İ` matches `i` but lowercases to two codepoints, which a bare
+dict subscript would turn into a 500.
+
+The pass runs **after** the `MAX_INPUT_CHARS` check on both endpoints, so that bound still
+measures what the caller sent; a respelling may push the synthesised text a few characters
+over. On the streaming endpoint it also runs after `strip_stage_directions`, so it never
+rewrites inside markup that is about to be deleted.
+
+Every malformed entry is **fatal** at load, like `voices.yaml` and unlike the character
+library: empty or non-string keys and values, whitespace-padded keys, case-insensitive
+collisions, unknown top-level keys, a missing file. **Non-Latin keys are rejected** rather
+than half-supported — the boundary is built from letter lookarounds, so a kana key would
+degenerate to a bare substring match and fire inside any longer run. An absent or empty
+`pronunciations:` mapping is *not* an error; it is how a deployment turns the table off
+without dropping the flag.
+
+Keys, replacements and input text are all normalized to **NFC** before matching — at load
+for keys and replacements, per-call for `apply`'s `text` argument. Accented Latin can be
+encoded two ways (a precomposed codepoint or a base letter plus a combining mark), and
+without normalization the two forms just don't compare equal, so a key typed in one form
+silently fails to match a caller's text in the other — no error, the word quietly passes
+through unrewritten, the worst failure mode for a feature whose only job is fixing
+pronunciation. Normalizing both sides to the same form means an accented key matches
+regardless of which composition the caller's client happened to send. The zero-entries
+guard in `apply` runs first and is unaffected: with no dictionary loaded, the caller's
+text is returned untouched, not even normalized.
+
+**The shipped values are unauditioned.** `Anbee` and `Demarra` are first-principles
+guesses at AN-bee and de-MAH-ra (Japanese アンビー・デマラ, Chinese 安比・德玛拉). Nobody has
+heard the model say either name, and no test can check it — if it already reads `Anby`
+correctly, this makes it worse. Settling it means an audition in the manner of the Billy
+filter, varying the reference draw as well as the voice, since two shipped transcripts
+(`anby/excited/Galgame_Chapter0_Anbi_05.txt`, `nicole/annoyed/GalGame_Chapter030_Nicole_020_014.txt`)
+contain the name and pair it with audio of the actor saying it correctly.
+
 ### `GET /v1/voices`
 
 Lists every voice, in the three shapes a client must tell apart. Not gated on warmup — it

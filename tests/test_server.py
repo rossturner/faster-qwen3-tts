@@ -23,9 +23,11 @@ class FakeManager:
         self.last_reference = reference
         return np.zeros(24000, dtype=np.float32)
 
-def client(manager=None):
+def client(manager=None, pronouncer=None):
+    from faster_qwen3_tts.pronunciations import EMPTY
     mgr = manager or FakeManager()
-    return TestClient(build_app(mgr, _registry())), mgr
+    return TestClient(build_app(mgr, _registry(),
+                                pronouncer=pronouncer or EMPTY)), mgr
 
 def test_health_ready():
     c, _ = client()
@@ -340,3 +342,54 @@ def test_page_makes_no_external_requests():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     for marker in ("http://", "https://", "//cdn", "integrity="):
         assert marker not in html, f"external reference {marker!r} in the page"
+
+
+from faster_qwen3_tts.pronunciations import Pronouncer
+from faster_qwen3_tts.server import DEFAULT_PRONUNCIATIONS
+
+
+def test_speech_applies_pronunciations_before_synthesis():
+    c, mgr = client(pronouncer=Pronouncer((("Anby", "Anbee"),)))
+    r = c.post("/v1/audio/speech", json={"input": "Hey Anby!", "voice": "en_m"})
+    assert r.status_code == 200
+    assert mgr.calls[-1][1] == "Hey Anbee!"
+
+
+def test_speech_length_check_measures_the_raw_input_not_the_substitution():
+    # "Anby" -> "Anbee" lengthens the text; the bound protects prefill against the
+    # caller's input, so it must not be applied to the rewritten string.
+    c, mgr = client(pronouncer=Pronouncer((("Anby", "Anbee"),)))
+    body = "Anby " * (MAX_INPUT_CHARS // 5)
+    assert len(body.strip()) <= MAX_INPUT_CHARS
+    r = c.post("/v1/audio/speech", json={"input": body, "voice": "en_m"})
+    assert r.status_code == 200
+
+
+def test_bare_pronunciations_flag_parses_to_bundled_sentinel():
+    args = build_parser().parse_args(["serve-http", "--pronunciations"])
+    assert args.pronunciations == "BUNDLED"
+
+
+def test_cmd_serve_http_resolves_bare_pronunciations_sentinel_to_bundled(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("faster_qwen3_tts.server.create_app",
+                        lambda **kw: captured.update(kw) or object())
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    cmd_serve_http(build_parser().parse_args(["serve-http", "--pronunciations"]))
+    assert captured["pronunciations_path"] == DEFAULT_PRONUNCIATIONS
+
+
+def test_cmd_serve_http_without_the_flag_loads_no_dictionary(monkeypatch):
+    captured = {}
+    monkeypatch.setattr("faster_qwen3_tts.server.create_app",
+                        lambda **kw: captured.update(kw) or object())
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    cmd_serve_http(build_parser().parse_args(["serve-http"]))
+    assert captured["pronunciations_path"] is None
+
+
+def test_bundled_pronunciations_file_loads_and_covers_both_names():
+    from faster_qwen3_tts.pronunciations import load_pronunciations
+    p = load_pronunciations(DEFAULT_PRONUNCIATIONS)
+    assert p.apply("Anby Demara") not in ("Anby Demara",)
+    assert p.apply("anby") == p.apply("Anby")
