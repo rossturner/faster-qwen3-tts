@@ -7,10 +7,20 @@
 # Loaded only when serve-http is given --pronunciations. Matching is case-insensitive and
 # whole-word; the replacement is emitted exactly as written here.
 #
-# NOT AUDITIONED. These are first-principles guesses at spellings the model will read as
-# AN-bee and de-MAH-ra (Japanese アンビー・デマラ, Chinese 安比・德玛拉 / Ānbǐ Démǎlā).
-# Nobody has heard the model say either name. If it already says "Anby" correctly then
-# this file makes it worse -- only ears can tell, so change these freely.
+# Anby and Demara are NOT AUDITIONED -- first-principles guesses at AN-bee and de-MAH-ra
+# (Japanese アンビー・デマラ, Chinese 安比・德玛拉 / Ānbǐ Démǎlā). Nobody has heard the model say
+# either, so change them freely. The two Eridu entries have been heard and are correct.
 pronunciations:
   Anby: "Anbee"
   Demara: "Demarra"
+  # New Eridu is named for the Sumerian city, /ˈɛrɪduː/ -- EH-ri-doo. The doubled r
+  # shortens the first vowel and pulls the stress forward, against an English reader's
+  # pull toward eh-RID-yoo or ee-RYE-doo.
+  Eridu: "Erridoo"
+  # The in-game short form, REE-doo. The doubled ee blocks RYE-doo, which is the default
+  # English reading of an open syllable.
+  #
+  # Does not fire inside "Eridu": the word boundary is a letter lookbehind, so the "E"
+  # blocks it. Pinned by a test, because a key added later without that boundary would
+  # break it silently.
+  Ridu: "Reedoo"

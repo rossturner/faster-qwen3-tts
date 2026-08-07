@@ -388,8 +388,13 @@ def test_cmd_serve_http_without_the_flag_loads_no_dictionary(monkeypatch):
     assert captured["pronunciations_path"] is None
 
 
-def test_bundled_pronunciations_file_loads_and_covers_both_names():
+def test_bundled_pronunciations_file_loads_and_covers_shipped_names():
     from faster_qwen3_tts.pronunciations import load_pronunciations
     p = load_pronunciations(DEFAULT_PRONUNCIATIONS)
     assert p.apply("Anby Demara") not in ("Anby Demara",)
     assert p.apply("anby") == p.apply("Anby")
+    assert p.apply("New Eridu") != "New Eridu"
+    assert p.apply("Ridu") != "Ridu"
+    # The short form must not fire inside the long one; the letter lookbehind is what
+    # stops it, and a key added later without that boundary would break this silently.
+    assert p.apply("New Eridu") == p.apply("New Eridu").replace("Reedoo", "")

@@ -454,11 +454,19 @@ regardless of which composition the caller's client happened to send. The zero-e
 guard in `apply` runs first and is unaffected: with no dictionary loaded, the caller's
 text is returned untouched, not even normalized.
 
-**The shipped values are unauditioned.** `Anbee` and `Demarra` are first-principles
-guesses at AN-bee and de-MAH-ra (Japanese アンビー・デマラ, Chinese 安比・德玛拉). Nobody has
-heard the model say either name, and no test can check it — if it already reads `Anby`
-correctly, this makes it worse. Settling it means an audition in the manner of the Billy
-filter, varying the reference draw as well as the voice, since two shipped transcripts
+**`Erridoo` and `Reedoo` are auditioned and correct.** New Eridu is named for the
+Sumerian city, /ˈɛrɪduː/ — EH-ri-doo — and `Ridu` is the in-game short form, REE-doo. The
+doubled `r` shortens the first vowel and pulls the stress forward, against an English
+reader's pull toward eh-RID-yoo or ee-RYE-doo; the doubled `ee` blocks RYE-doo, the
+default English reading of an open syllable. `Ridu` cannot fire inside `Eridu` — the word
+boundary is a letter lookbehind, so the `E` blocks it, and a test pins this because a key
+added later without that boundary would break it silently.
+
+**`Anbee` and `Demarra` are still unauditioned**, first-principles guesses at AN-bee and
+de-MAH-ra (Japanese アンビー・デマラ, Chinese 安比・德玛拉). Nobody has heard the model say
+either, and no test can check it — if it already reads `Anby` correctly, they make it
+worse. Settling them means an audition in the manner of the Billy filter, varying the
+reference draw as well as the voice, since two shipped transcripts
 (`anby/excited/Galgame_Chapter0_Anbi_05.txt`, `nicole/annoyed/GalGame_Chapter030_Nicole_020_014.txt`)
 contain the name and pair it with audio of the actor saying it correctly.
 
