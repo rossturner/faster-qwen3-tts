@@ -296,6 +296,8 @@ def describe_voices(registry: Registry) -> list:
 def build_app(manager, registry: Registry, serve_page: bool = False,
               pronouncer: Pronouncer = NO_PRONUNCIATIONS) -> FastAPI:
     app = FastAPI(title="faster-qwen3-tts server")
+    # Which table a deployment ended up with is otherwise only observable by synthesising.
+    app.state.pronouncer = pronouncer
 
     @app.get("/health")
     async def health():
@@ -388,7 +390,11 @@ def build_app(manager, registry: Registry, serve_page: bool = False,
                 "sample_rate": sample_rate, "channels": 1, "format": "s16le",
                 "voice": cfg.id, "emotion": cfg.emotion,
                 "requested_emotion": req.emotion,
-                "reference": reference.id if reference is not None else None})
+                "reference": reference.id if reference is not None else None,
+                # What the model was actually given, after stripping and rewriting. The
+                # audition page shows it: a respelling or a filler is otherwise invisible
+                # except in the audio, which is the thing being judged.
+                "text": text})
             audio_ms = decode_ms = 0.0
             # Per request: the filter is stateful, so one instance must not be shared.
             chorus = cfg.audio_filter.build(sample_rate) if cfg.audio_filter else None
@@ -437,8 +443,18 @@ def create_app(voices_path=None, characters_path=None, device="cuda",
                max_new_tokens=DEFAULT_MAX_NEW_TOKENS, warmup=True,
                pronunciations_path=None) -> FastAPI:
     registry = build_registry(voices_path, characters_path)
-    # None means no dictionary, matching voices_path/characters_path: the bundled table
-    # is opt-in so the dubbing deployment does not inherit lyrebird's respellings.
+    # None means no dictionary: the bundled table is opt-in so the dubbing deployment
+    # does not inherit lyrebird's respellings.
+    #
+    # Except when a character library is configured, which also mounts the audition page.
+    # That page is the tool for settling how a name or a filler actually sounds, and it
+    # posts to /v1/audio/stream like any other client -- so without this it would
+    # audition text that production never sees, and the miss would be silent: you would
+    # type an ellipsis, hear no pause, and conclude the feature does not work. An
+    # explicit --pronunciations still wins; point it at a table with no entries to
+    # audition raw.
+    if pronunciations_path is None and characters_path is not None:
+        pronunciations_path = DEFAULT_PRONUNCIATIONS
     pronouncer = (load_pronunciations(pronunciations_path)
                   if pronunciations_path is not None else NO_PRONUNCIATIONS)
     manager = ModelManager(registry, device=device, max_new_tokens=max_new_tokens)

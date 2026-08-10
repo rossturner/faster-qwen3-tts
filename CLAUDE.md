@@ -199,7 +199,7 @@ Frame layout is `1 byte type | 4 byte big-endian length | payload`:
 
 | Type | Payload |
 |---|---|
-| `0x01` header | JSON `{sample_rate, channels, format, voice, emotion, requested_emotion, reference}` |
+| `0x01` header | JSON `{sample_rate, channels, format, voice, emotion, requested_emotion, reference, text}` |
 | `0x02` audio | raw s16le PCM |
 | `0x03` mark | JSON `{chunk_index, decode_ms, prefill_ms, audio_ms_so_far}` |
 | `0x04` error | JSON `{message}` — failure after the response began |
@@ -207,7 +207,9 @@ Frame layout is `1 byte type | 4 byte big-endian length | payload`:
 
 `emotion` is what was actually used and `requested_emotion` what was asked for; they
 differ when a character's emotion had no recordings and neutral stood in. `reference`
-names the recording chosen for this request, and is null for custom voices.
+names the recording chosen for this request, and is null for custom voices. `text` is
+what the model was actually given, after stripping and rewriting — always present, so a
+client compares it against what it sent rather than treating absence as "unchanged".
 
 Framing exists because the HTTP status is committed once the first byte is sent, so a
 mid-stream failure cannot be a 5xx. **A stream that ends without an end frame is a
@@ -463,6 +465,14 @@ punctuation and inserting a filler would rewrite the script and lengthen it agai
 original's timing, so the deployment that must not get respellings must not get fillers
 either.
 
+**`--characters` implies the bundled table**, because it also mounts the audition page and
+that page is the tool for settling how a name or a filler sounds. Without the implication
+it would audition text production never sees, and the miss would be silent: you would type
+an ellipsis, hear no pause, and conclude the feature is broken. An explicit
+`--pronunciations` still wins, and pointing it at a table with no entries is now the way
+to audition raw. The implication is tied to `--characters`, not to serving in general —
+`--voices` alone still loads nothing.
+
 Matching is case-insensitive and the replacement is emitted **verbatim**, so `ANBY`
 becomes `Anbee` — preserving the caller's capitalisation would be work spent on something
 the model ignores. Whole-word, where "word" is bounded by **Latin script** rather than
@@ -537,6 +547,11 @@ type a line, and it streams over `/v1/audio/stream` and plays through WebAudio w
 showing TTFA, per-chunk decode time, inter-arrival gap and **playback margin** — delivered
 audio minus elapsed time, the quantity that decides whether playback starves. A chunk that
 arrives too late to schedule cleanly is flagged as an underrun.
+
+Under the input box it shows **what the model was actually given**, from the header
+frame's `text`, and only when that differs from what was typed — echoing an unchanged line
+back would be noise on every take. Since `--characters` implies the pronunciation table,
+nothing shown means nothing was rewritten rather than the table being off.
 
 ## Gotchas
 

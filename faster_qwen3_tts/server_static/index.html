@@ -13,6 +13,8 @@
   textarea { width: 100%; height: 70px; box-sizing: border-box; }
   button { cursor: pointer; }
   button[disabled] { cursor: default; opacity: .5; }
+  #rewrite { margin: 6px 0 0; font-size: 13px; opacity: .8; }
+  #rewrite b { font-weight: 600; opacity: .7; font-size: 12px; }
   #status { margin: 12px 0; min-height: 1.5em; }
   .err { color: #c00; }
   .warn { color: #b60; }
@@ -38,6 +40,8 @@
 </div>
 
 <textarea id="text">Haha, no. I have read this same error message four times now and it still says nothing useful.</textarea>
+
+<div id="rewrite"></div>
 
 <div id="status"></div>
 <div id="ttfa"></div>
@@ -153,9 +157,25 @@ function makePlayer() {
   };
 }
 
+// Only when it differs. Echoing an unchanged line back would be noise on every take,
+// and with --characters the table is always loaded, so "nothing shown" reliably means
+// "nothing to rewrite here" rather than "the dictionary is off".
+function showRewrite(sent, used) {
+  const el = $('rewrite');
+  el.textContent = '';
+  if (typeof used !== 'string' || used === sent.trim()) return;
+  const label = document.createElement('b');
+  label.textContent = 'sent to model: ';
+  const body = document.createElement('span');
+  // textContent, not innerHTML: this is caller-supplied text coming back off the wire.
+  body.textContent = used;
+  el.append(label, body);
+}
+
 async function generate() {
   $('go').disabled = true; $('stop').disabled = false;
   $('chunks').tBodies[0].innerHTML = ''; $('ttfa').textContent = '';
+  $('rewrite').textContent = '';
   setStatus('generating…');
 
   // Constructed on the gesture: an ungestured AudioContext is blocked and warns.
@@ -181,6 +201,7 @@ async function generate() {
     for await (const f of readFrames(res.body.getReader())) {
       if (f.type === 1) {
         header = JSON.parse(new TextDecoder().decode(f.payload));
+        showRewrite(body.input, header.text);
         const fell = header.requested_emotion &&
                      header.requested_emotion !== header.emotion;
         setStatus(`${header.voice} · ${header.emotion}` +

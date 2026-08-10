@@ -344,6 +344,15 @@ def test_page_makes_no_external_requests():
         assert marker not in html, f"external reference {marker!r} in the page"
 
 
+def test_page_shows_the_text_the_model_was_given():
+    # The page is the tool for auditioning a respelling or a filler, so it has to show
+    # what the rewrite produced -- otherwise the only evidence is the audio being judged.
+    from faster_qwen3_tts.server import STATIC_DIR
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="rewrite"' in html
+    assert "showRewrite(body.input, header.text)" in html
+
+
 from faster_qwen3_tts.pronunciations import Pronouncer
 from faster_qwen3_tts.server import DEFAULT_PRONUNCIATIONS
 
@@ -393,6 +402,44 @@ def test_cmd_serve_http_without_the_flag_loads_no_dictionary(monkeypatch):
     monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
     cmd_serve_http(build_parser().parse_args(["serve-http"]))
     assert captured["pronunciations_path"] is None
+
+
+def _app_pronouncer(**kw):
+    from faster_qwen3_tts.server import create_app
+    app = create_app(warmup=False, **kw)
+    # The pronouncer is closed over by the route; read it back off the built app.
+    return app.state.pronouncer
+
+
+def test_a_character_library_implies_the_bundled_table():
+    # The audition page only exists when --characters is given, and it is the tool for
+    # settling how a name or a filler sounds. Without this it would audition text
+    # production never sees, and the miss would be silent.
+    p = _app_pronouncer(characters_path=DEFAULT_CHARACTERS)
+    assert p.apply("Anby") == "Anbee"
+    assert p.apply("a... b") != "a... b"
+
+
+def test_an_explicit_table_still_wins_over_the_implied_one(tmp_path):
+    path = tmp_path / "p.yaml"
+    path.write_text('pronunciations:\n  Anby: "OTHER"\n', encoding="utf-8")
+    p = _app_pronouncer(characters_path=DEFAULT_CHARACTERS, pronunciations_path=path)
+    assert p.apply("Anby") == "OTHER"
+
+
+def test_an_empty_explicit_table_is_how_you_audition_raw(tmp_path):
+    # The escape hatch the implication costs: --characters can no longer mean "no
+    # rewriting", so pointing at a table with no entries is the way to get it.
+    path = tmp_path / "p.yaml"
+    path.write_text("pronunciations: {}\n", encoding="utf-8")
+    p = _app_pronouncer(characters_path=DEFAULT_CHARACTERS, pronunciations_path=path)
+    assert p.apply("Anby... b") == "Anby... b"
+
+
+def test_voices_only_still_loads_no_dictionary():
+    # media-worker's deployment. The implication is tied to --characters, not to serving.
+    p = _app_pronouncer(voices_path=DEFAULT_VOICES)
+    assert p.apply("Anby... b") == "Anby... b"
 
 
 def test_bundled_pronunciations_file_loads_and_covers_shipped_names():

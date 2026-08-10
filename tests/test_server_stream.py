@@ -391,6 +391,26 @@ def test_stream_replaces_a_medial_ellipsis_with_a_filler():
     assert mgr.calls[-1][1] == "I'm the, uh, other thing"
 
 
+def test_header_frame_carries_the_text_the_model_was_given():
+    # The audition page shows this; a respelling or a filler is otherwise invisible
+    # except in the audio, which is the thing being judged.
+    import json
+    c, _ = _stream_client(pronouncer=Pronouncer((("Anby", "Anbee"),), ("uh",)))
+    r = c.post("/v1/audio/stream",
+               json={"input": "*waves* Anby... hello", "voice": "nicole"})
+    header = json.loads(_frames(r)[0][1])
+    assert header["text"] == "Anbee, uh, hello"
+
+
+def test_header_frame_text_is_present_when_nothing_is_rewritten():
+    # Always sent, never omitted: the page decides whether to show it by comparing.
+    import json
+    c, _ = _stream_client()
+    r = c.post("/v1/audio/stream", json={"input": "plain line", "voice": "nicole"})
+    header = json.loads(_frames(r)[0][1])
+    assert header["text"] == "plain line"
+
+
 def test_stripping_a_stage_direction_can_make_an_ellipsis_medial():
     # Filling runs after stripping, so markup between the dots and the next word does not
     # hide the ellipsis. Reversed, this would stay "I'm the... other thing".
