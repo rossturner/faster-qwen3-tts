@@ -160,11 +160,30 @@ def test_a_medial_ellipsis_becomes_a_comma_delimited_filler(written):
     assert _f("uh").apply(written) == "the, uh, other"
 
 
-@pytest.mark.parametrize("text", ["...leading", "trailing...", "Wait...!", 'the... "other"',
-                                  "the. other", "3.14"])
-def test_non_medial_or_single_dot_is_left_alone(text):
-    # Misses are no-ops -- the mark is inert either way -- so the boundary is narrow on
-    # purpose. A dangling ", uh," at the end of a line would be worse than nothing.
+@pytest.mark.parametrize("text,expected", [
+    # Opening a sentence: one comma, after. A leading one would attach to the previous
+    # sentence's full stop. This is the commonest dramatic beat there is, and the first
+    # version of the rule -- word character required on both sides -- missed all of it.
+    ("cargo! ...It was a box", "cargo! Uh, It was a box"),
+    ("Wait. ...I remember", "Wait. Uh, I remember"),
+    ("So?... Anyway", "So? Uh, Anyway"),
+    # Opening the whole input: no space to put back, and nothing before to capitalise for.
+    ("...It was a box", "Uh, It was a box"),
+    # Mid-clause after punctuation that is not a sentence end: comma after, no capital.
+    ("Well,... I guess", "Well, uh, I guess"),
+    # The lookahead steps over an opening quote, and the quote survives.
+    ('the... "other thing"', 'the, uh, "other thing"'),
+])
+def test_an_ellipsis_with_a_word_to_its_right_fills(text, expected):
+    assert _f("uh").apply(text) == expected
+
+
+@pytest.mark.parametrize("text", ["trailing...", "Wait...!", "and called it a day...",
+                                  "the. other", "3.14", "done…"])
+def test_nothing_to_attach_to_is_left_alone(text):
+    # A trailing ellipsis has no word to its right, and "a day, uh," dangling off the end
+    # of a line is worse than the nothing an ellipsis already does. Misses are no-ops --
+    # the mark is inert either way -- so this is the safe direction.
     assert _f("uh").apply(text) == text
 
 
@@ -239,6 +258,15 @@ def test_absent_or_empty_fillers_turns_filling_off(tmp_path, body):
 def test_malformed_fillers_are_fatal(tmp_path, body, match):
     with pytest.raises(ValueError, match=match):
         load_pronunciations(_write(tmp_path, body))
+
+
+def test_a_sentence_opening_ellipsis_in_a_real_line():
+    # Verbatim from a lyrebird line that silently went unfilled under the first rule.
+    line = ("I found that one commission that paid triple! "
+            "...It was a box of instant noodles, but they were premium brand!")
+    assert _f("uh").apply(line) == (
+        "I found that one commission that paid triple! "
+        "Uh, It was a box of instant noodles, but they were premium brand!")
 
 
 def test_the_bundled_table_fills_and_respells():

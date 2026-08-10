@@ -34,8 +34,9 @@ pronunciations:
 # are measured inert, so "- uh -" would be this same word with two characters that do
 # nothing and might be voiced.
 #
-# Only a medial ellipsis is rewritten, so a line that trails off at the end keeps its
-# dots and stays silent there. Repeat an entry to weight it.
+# An ellipsis fills wherever there is a word to its right: mid-clause it takes a comma
+# both sides, opening a sentence it takes one only after. A line that trails off at the
+# end keeps its dots, since there is nothing to attach to. Repeat an entry to weight it.
 #
 # NOT AUDITIONED as a pair -- "uh" and "um" are both ordinary English hesitations, but
 # nobody has compared them in this voice. Non-English deployments should replace them

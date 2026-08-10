@@ -40,15 +40,27 @@ TOP_LEVEL_KEYS = {"pronunciations", "fillers"}
 _LETTER = r"A-Za-z\u00C0-\u024F\u1E00-\u1EFF\u0300-\u036F"
 _KEY_ALLOWED = re.compile(rf"^[{_LETTER} '\-]+$")
 
-# Only a *medial* ellipsis, with a word character either side, and swallowing the
-# whitespace around it so the replacement supplies its own. A leading or trailing one is
-# left alone: ", uh," dangling off the end of a line is worse than the nothing an
-# ellipsis already does, and since the mark is inert, every miss here is a no-op rather
-# than a regression. That asymmetry is why the boundary is deliberately narrow -- it also
-# means `Wait...!` and `the... "other thing"` go unrewritten, which is the safe direction.
-# A run of two or more dots, or a single U+2026, or any mix of the two. One bare dot is
-# excluded so "the. other" and "3.14" are untouched.
-_ELLIPSIS = re.compile(r"(?<=\w)\s*(?:[.\u2026]{2,}|\u2026)\s*(?=\w)")
+# The only thing an ellipsis needs in order to be fillable is a word to its *right* to
+# attach the filler to. What is on the left decides the form, not whether it fires -- see
+# _fill. Requiring a word on both sides was the first attempt and it was too narrow: it
+# missed `...It was a box of instant noodles`, an ellipsis opening a sentence after `!`,
+# which is the commonest dramatic beat there is in this kind of dialogue.
+#
+# A trailing one still does nothing, because there is no word to attach to: `a day, uh,`
+# dangling off the end of a line is worse than the nothing an ellipsis already does. So
+# `Wait...!` and `and called it a day...` stay as they are.
+#
+# The lookahead steps over an opening quote or bracket so `the... "other thing"` fills
+# and the quote survives -- the lookahead consumes nothing, so the filler lands in front
+# of it. A run of two or more dots, or a single U+2026, or any mix; one bare dot never
+# matches, so "the. other" and "3.14" are untouched.
+_ELLIPSIS = re.compile(
+    r"\s*(?:[.\u2026]{2,}|\u2026)\s*(?=[\"'\u201c\u2018\u00ab(\[\u00bf\u00a1]*\w)")
+
+# Sentence enders, for capitalising the filler that replaces an ellipsis after one. Purely
+# cosmetic -- ALL CAPS is measured inert, so the model cannot tell -- but the audition page
+# shows this text, and that display is only useful if it reads like the line it is.
+_SENTENCE_END = ".!?\u2026"
 
 
 @dataclass(frozen=True)
@@ -88,8 +100,25 @@ class Pronouncer:
         matched = match.group(0)
         return self._table.get(matched.lower(), matched)
 
-    def _fill(self, _match: re.Match, rng) -> str:
-        return f", {rng.choice(self.fillers)}, "
+    def _fill(self, match: re.Match, rng) -> str:
+        """Two forms, chosen by what the ellipsis interrupted.
+
+        Mid-clause it is a parenthetical, so the filler takes a comma on both sides.
+        Opening a sentence it is a beat before the next thought, so it takes one only
+        after -- a leading comma there would be attached to the previous sentence's
+        full stop.
+        """
+        filler = rng.choice(self.fillers)
+        start = match.start()
+        prev = match.string[start - 1] if start else ""
+        if prev.isalnum() or prev == "_":
+            return f", {filler}, "
+        # The match swallowed the space after the previous sentence; put it back, unless
+        # the ellipsis opened the whole input and there was none.
+        lead = " " if start else ""
+        if not prev or prev in _SENTENCE_END:
+            filler = filler.capitalize()
+        return f"{lead}{filler}, "
 
     def apply(self, text: str, rng: Optional[random.Random] = None) -> str:
         """Respell, then fill. Each is one pass -- a loop of per-entry re.sub would let

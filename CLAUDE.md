@@ -416,7 +416,7 @@ pronunciations:
   Demara: "Demarra"
 ```
 
-The second is a list of hesitation fillers, one of which replaces a **medial** ellipsis:
+The second is a list of hesitation fillers, one of which replaces an ellipsis:
 
 ```yaml
 fillers: ["uh", "um"]
@@ -435,14 +435,32 @@ fix spends a word: `I'm the... other thing` → `I'm the, uh, other thing`.
 hyphens and em-dashes are measured inert, so `- uh -` would be this same word with two
 characters that do nothing and might be voiced.
 
-**Only a medial ellipsis is rewritten** — one with a word character either side, and the
-surrounding whitespace is swallowed so the replacement supplies its own. A leading or
-trailing one keeps its dots: `", uh,"` dangling off the end of a line is worse than the
-nothing an ellipsis already does. Since the mark is inert, **every miss is a no-op, not a
-regression**, which is why the boundary is deliberately narrow — `Wait...!` and
-`the... "other thing"` go unrewritten too. A run of two or more dots, a `…`, or any mix
-all match; one bare dot never does, so `3.14` is safe. `\w` is unicode-aware, so
-`そう…です` counts as medial for the same reason the respelling boundary avoids `\b`.
+**The only thing an ellipsis needs is a word to its right** to attach the filler to. What
+is on the left decides the *form*, not whether it fires:
+
+| position | example | becomes |
+|---|---|---|
+| mid-clause | `I'm the... other thing` | `I'm the, uh, other thing` |
+| opening a sentence | `cargo! ...It was a box` | `cargo! Uh, It was a box` |
+| nothing to the right | `and called it a day...` | unchanged |
+
+Mid-clause the filler is a parenthetical and takes a comma both sides. Opening a sentence
+it is a beat before the next thought and takes one only after — a leading comma there
+would attach to the previous sentence's full stop. The capital is cosmetic (ALL CAPS is
+inert) but the audition page shows this text, so it should read like the line it is.
+
+**Requiring a word on both sides was the first attempt and it was too narrow**: it missed
+every sentence-opening ellipsis, which is the commonest dramatic beat in this kind of
+dialogue. Only a *trailing* one is now excluded, because there is genuinely nothing to
+attach to — `a day, uh,` dangling off the end of a line is worse than the nothing an
+ellipsis already does, so `Wait...!` stays too. Since the mark is inert, **every miss is a
+no-op, not a regression**.
+
+Surrounding whitespace is swallowed and resupplied by the replacement. The lookahead steps
+over an opening quote or bracket, so `the... "other thing"` fills and the quote survives.
+A run of two or more dots, a `…`, or any mix all match; one bare dot never does, so `3.14`
+is safe. `\w` is unicode-aware, so `そう…です` fills for the same reason the respelling
+boundary avoids `\b`.
 
 The choice is **uniform per occurrence**, from an injectable `random.Random` mirroring
 `pick_reference`. Repeat an entry to weight it. Nothing here is language-aware — `uh`/`um`
