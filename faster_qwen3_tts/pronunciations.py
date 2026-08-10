@@ -1,25 +1,36 @@
-"""Respell configured words in request text before it reaches the model.
+"""Rewrite request text before it reaches the model.
 
 Qwen3-TTS has no pronunciation control of any kind -- no G2P frontend, no lexicon, no
 phoneme or IPA input, no SSML. Text goes verbatim into the chat template. So the only
 lever on how a word is said is how it is spelled, and it has to be a change of *letters*:
 spikes/emotion/text_markup.py measured typography (ALL CAPS, ellipses, em-dash) as inert.
 
-The shipped case is the name "Anby" from Zenless Zone Zero, which is AN-bee and which the
-model would otherwise be free to read as an-BY. Three characters say it, so the table is
-global rather than declared per character.
+Two rewrites live here, both following from that one measurement, and both behind the
+single --pronunciations opt-in:
+
+* Respelling. The shipped case is the name "Anby" from Zenless Zone Zero, which is AN-bee
+  and which the model would otherwise be free to read as an-BY. Three characters say it,
+  so the table is global rather than declared per character.
+
+* Hesitation fillers. An ellipsis buys no pause -- that is the same inertness finding,
+  and it is the one upstream complaint with no maintainer answer (GH discussion #75, HF
+  Base discussion #9: newlines, dots, dashes and underscores all reported to make "no
+  difference"). What the same spike found *does* work is lexical vocalisations: `Haha,`
+  `Ugh,` `Hmm.` were spoken every time. So a medial ellipsis is replaced by an actual
+  spoken filler, comma-delimited because commas move prosody and dashes do not.
 """
 from __future__ import annotations
 
+import random
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
-TOP_LEVEL_KEYS = {"pronunciations"}
+TOP_LEVEL_KEYS = {"pronunciations", "fillers"}
 
 # Latin script, not [A-Za-z] and not \b. Two failure modes are being avoided at once:
 # \b would not match "Anbyさん", because CJK characters are word characters, so the rule
@@ -29,12 +40,23 @@ TOP_LEVEL_KEYS = {"pronunciations"}
 _LETTER = r"A-Za-z\u00C0-\u024F\u1E00-\u1EFF\u0300-\u036F"
 _KEY_ALLOWED = re.compile(rf"^[{_LETTER} '\-]+$")
 
+# Only a *medial* ellipsis, with a word character either side, and swallowing the
+# whitespace around it so the replacement supplies its own. A leading or trailing one is
+# left alone: ", uh," dangling off the end of a line is worse than the nothing an
+# ellipsis already does, and since the mark is inert, every miss here is a no-op rather
+# than a regression. That asymmetry is why the boundary is deliberately narrow -- it also
+# means `Wait...!` and `the... "other thing"` go unrewritten, which is the safe direction.
+# A run of two or more dots, or a single U+2026, or any mix of the two. One bare dot is
+# excluded so "the. other" and "3.14" are untouched.
+_ELLIPSIS = re.compile(r"(?<=\w)\s*(?:[.\u2026]{2,}|\u2026)\s*(?=\w)")
+
 
 @dataclass(frozen=True)
 class Pronouncer:
-    """A substitution table plus the single pattern that applies it."""
+    """A substitution table plus the single pattern that applies it, and the filler list."""
 
     entries: Tuple[Tuple[str, str], ...] = ()
+    fillers: Tuple[str, ...] = ()
     _table: Dict[str, str] = field(default_factory=dict, init=False,
                                    compare=False, repr=False)
     _pattern: Optional[re.Pattern] = field(default=None, init=False,
@@ -66,12 +88,27 @@ class Pronouncer:
         matched = match.group(0)
         return self._table.get(matched.lower(), matched)
 
-    def apply(self, text: str) -> str:
-        """One pass. A loop of per-entry re.sub would let one rule's output feed the
-        next, which is a silent bug the moment the table has a few entries."""
-        if self._pattern is None:
+    def _fill(self, _match: re.Match, rng) -> str:
+        return f", {rng.choice(self.fillers)}, "
+
+    def apply(self, text: str, rng: Optional[random.Random] = None) -> str:
+        """Respell, then fill. Each is one pass -- a loop of per-entry re.sub would let
+        one rule's output feed the next, which is a silent bug the moment the table has a
+        few entries.
+
+        Respelling runs first so an inserted filler can never be caught by a caller's
+        respelling rule. The reverse cannot happen: keys are Latin letters, spaces,
+        apostrophes and hyphens, so no replacement can produce an ellipsis.
+        """
+        if self._pattern is None and not self.fillers:
             return text
-        return self._pattern.sub(self._replace, unicodedata.normalize("NFC", text))
+        text = unicodedata.normalize("NFC", text)
+        if self._pattern is not None:
+            text = self._pattern.sub(self._replace, text)
+        if self.fillers:
+            chooser = rng or random
+            text = _ELLIPSIS.sub(lambda m: self._fill(m, chooser), text)
+        return text
 
 
 EMPTY = Pronouncer()
@@ -126,4 +163,27 @@ def load_pronunciations(path) -> Pronouncer:
                 f"matching is case-insensitive so the table would be ambiguous")
         seen[lowered] = key
         entries.append((key, value))
-    return Pronouncer(tuple(entries))
+    return Pronouncer(tuple(entries), _load_fillers(path, data))
+
+
+def _load_fillers(path: Path, data: dict) -> Tuple[str, ...]:
+    """Read the filler list. Absent or empty is how a deployment turns fillers off
+    without dropping the --pronunciations flag, exactly as for 'pronunciations'."""
+    raw = data.get("fillers") or []
+    if not isinstance(raw, list):
+        raise ValueError(f"{path}: 'fillers' must be a list")
+    fillers: List[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(f"{path}: filler {item!r} must be a string")
+        item = unicodedata.normalize("NFC", item)
+        if not item or item != item.strip():
+            raise ValueError(
+                f"{path}: filler {item!r} is empty or has leading/trailing whitespace")
+        # Not checked against _KEY_ALLOWED: a Japanese or Korean deployment wants
+        # "えっと" or "어", and unlike a respelling key this is emitted, never matched, so
+        # the letter-lookaround reasoning that forces Latin keys does not apply.
+        fillers.append(item)
+    # Duplicates are deliberately allowed: repeating an entry is how the list weights the
+    # draw, since the choice is uniform over it.
+    return tuple(fillers)

@@ -365,6 +365,13 @@ def test_speech_length_check_measures_the_raw_input_not_the_substitution():
     assert r.status_code == 200
 
 
+def test_speech_replaces_a_medial_ellipsis_with_a_filler():
+    c, mgr = client(pronouncer=Pronouncer((), ("uh",)))
+    r = c.post("/v1/audio/speech", json={"input": "I'm the... other thing", "voice": "en_m"})
+    assert r.status_code == 200
+    assert mgr.calls[-1][1] == "I'm the, uh, other thing"
+
+
 def test_bare_pronunciations_flag_parses_to_bundled_sentinel():
     args = build_parser().parse_args(["serve-http", "--pronunciations"])
     assert args.pronunciations == "BUNDLED"

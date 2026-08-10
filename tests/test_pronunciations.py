@@ -1,4 +1,5 @@
 # tests/test_pronunciations.py
+import random
 import unicodedata
 
 import pytest
@@ -8,6 +9,10 @@ from faster_qwen3_tts.pronunciations import EMPTY, Pronouncer, load_pronunciatio
 
 def _p(**entries):
     return Pronouncer(tuple(entries.items()))
+
+
+def _f(*fillers):
+    return Pronouncer((), fillers)
 
 
 def _write(tmp_path, body):
@@ -145,6 +150,103 @@ def test_invalid_yaml_syntax_is_fatal(tmp_path):
     # Unterminated quote raises yaml.YAMLError, which must be re-raised as ValueError
     with pytest.raises(ValueError, match="invalid YAML"):
         load_pronunciations(_write(tmp_path, 'pronunciations:\n  Anby: "x\n'))
+
+
+@pytest.mark.parametrize("written", ["the... other", "the ... other", "the...other",
+                                     "the…other", "the .... other", "the.…. other"])
+def test_a_medial_ellipsis_becomes_a_comma_delimited_filler(written):
+    # Every spelling collapses to the same output, and the surrounding whitespace is
+    # supplied by the replacement rather than left over from the input.
+    assert _f("uh").apply(written) == "the, uh, other"
+
+
+@pytest.mark.parametrize("text", ["...leading", "trailing...", "Wait...!", 'the... "other"',
+                                  "the. other", "3.14"])
+def test_non_medial_or_single_dot_is_left_alone(text):
+    # Misses are no-ops -- the mark is inert either way -- so the boundary is narrow on
+    # purpose. A dangling ", uh," at the end of a line would be worse than nothing.
+    assert _f("uh").apply(text) == text
+
+
+def test_every_occurrence_is_drawn_independently():
+    text = "I mean... I suppose... if you want"
+    rng = random.Random(0)
+    out = _f("uh", "um").apply(text, rng=rng)
+    assert out.count(", uh, ") + out.count(", um, ") == 2
+
+
+def test_the_draw_is_uniform_over_the_list_including_duplicates():
+    # Duplicates weight the draw; that is the documented way to bias it.
+    picks = {_f("uh", "uh", "um").apply("a... b", rng=random.Random(s)) for s in range(50)}
+    assert picks == {"a, uh, b", "a, um, b"}
+
+
+def test_respelling_runs_before_filling():
+    # An inserted filler must not be catchable by a caller's respelling rule.
+    p = Pronouncer((("uh", "OOPS"),), ("uh",))
+    assert p.apply("Anby... yes") == "Anby, uh, yes"
+
+
+def test_respelling_and_filling_compose():
+    p = Pronouncer((("Anby", "Anbee"),), ("uh",))
+    assert p.apply("Anby... yes") == "Anbee, uh, yes"
+
+
+def test_fillers_without_entries_still_fire():
+    # The zero-entries early return must not short-circuit the filler pass.
+    assert _f("uh").apply("a... b") == "a, uh, b"
+
+
+def test_no_fillers_leaves_the_ellipsis():
+    assert _p(Anby="Anbee").apply("Anby... yes") == "Anbee... yes"
+
+
+def test_empty_pronouncer_leaves_an_ellipsis_alone():
+    assert EMPTY.apply("a... b") == "a... b"
+
+
+def test_cjk_adjacency_counts_as_medial():
+    # \w is unicode-aware, so this fires for the same reason the respelling boundary
+    # deliberately does not use \b.
+    assert _f("uh").apply("そう…です") == "そう, uh, です"
+
+
+def test_a_non_latin_filler_is_allowed(tmp_path):
+    # Unlike a respelling key, a filler is emitted and never matched, so the
+    # Latin-script restriction does not apply to it.
+    path = _write(tmp_path, 'fillers: ["えっと"]\n')
+    assert load_pronunciations(path).apply("そう…です") == "そう, えっと, です"
+
+
+def test_load_reads_fillers(tmp_path):
+    path = _write(tmp_path, 'pronunciations:\n  Anby: "Anbee"\nfillers: ["uh"]\n')
+    assert load_pronunciations(path).apply("Anby... yes") == "Anbee, uh, yes"
+
+
+@pytest.mark.parametrize("body", ["pronunciations:\n  Anby: x\n", "fillers: []\n",
+                                  "fillers:\n"])
+def test_absent_or_empty_fillers_turns_filling_off(tmp_path, body):
+    # How a deployment keeps --pronunciations but wants no fillers.
+    assert load_pronunciations(_write(tmp_path, body)).apply("a... b") == "a... b"
+
+
+@pytest.mark.parametrize("body,match", [
+    ('fillers: "uh"\n', "must be a list"),
+    ('fillers: [3]\n', "must be a string"),
+    ('fillers: [""]\n', "empty or has leading/trailing whitespace"),
+    ('fillers: [" uh "]\n', "empty or has leading/trailing whitespace"),
+])
+def test_malformed_fillers_are_fatal(tmp_path, body, match):
+    with pytest.raises(ValueError, match=match):
+        load_pronunciations(_write(tmp_path, body))
+
+
+def test_the_bundled_table_fills_and_respells():
+    from faster_qwen3_tts.server import DEFAULT_PRONUNCIATIONS
+    p = load_pronunciations(DEFAULT_PRONUNCIATIONS)
+    out = p.apply("Anby is the brains and I'm the... other thing", rng=random.Random(0))
+    assert out.startswith("Anbee is")
+    assert ", uh, other thing" in out or ", um, other thing" in out
 
 
 @pytest.mark.parametrize("body", ["42\n", "[1, 2, 3]\n"])

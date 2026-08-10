@@ -416,8 +416,8 @@ def build_parser():
                     help="Character library directory; bare flag uses the bundled one. "
                          "Given alone, voices.yaml is not loaded.")
     sp.add_argument("--pronunciations", nargs="?", const="BUNDLED", default=None,
-                    help="Pronunciation table; bare flag uses the bundled one. "
-                         "Omitted, no respelling is applied.")
+                    help="Text-rewrite table -- respellings and hesitation fillers; "
+                         "bare flag uses the bundled one. Omitted, input is not rewritten.")
     sp.add_argument("--max-new-tokens", type=int, default=1024)
     sp.set_defaults(fn=cmd_serve_http)
 

@@ -396,7 +396,7 @@ audibly, and 0.50 is firm. Earlier attempts to derive the filter by measuring dr
 processed game audio failed: the two sets are different takes by the same actor, so the
 spectral difference was mostly performance, not effect.
 
-### Pronunciation dictionary
+### Pronunciation dictionary and hesitation fillers
 
 Qwen3-TTS has no pronunciation control: no G2P frontend, no lexicon, no phoneme or IPA
 input, no SSML. The upstream package has no phonemiser and the tokenizer's 33 added
@@ -404,8 +404,9 @@ tokens are all plumbing; text goes verbatim into the chat template. So the only 
 how a word is said is how it is **spelled**, and it has to change letters — typography
 (ALL CAPS, ellipses, em-dash) is measured inert.
 
-`server_voices/pronunciations.yaml` is a flat table of respellings, applied to `input` on
-**both** synthesis endpoints immediately before synthesis:
+`server_voices/pronunciations.yaml` carries two rewrites that both follow from that one
+finding, applied to `input` on **both** synthesis endpoints immediately before synthesis.
+The first is a flat table of respellings:
 
 ```yaml
 pronunciations:
@@ -413,9 +414,54 @@ pronunciations:
   Demara: "Demarra"
 ```
 
+The second is a list of hesitation fillers, one of which replaces a **medial** ellipsis:
+
+```yaml
+fillers: ["uh", "um"]
+```
+
+**An ellipsis buys no pause** — that is the same inertness result, and it is the one
+upstream complaint with no maintainer answer ([GH discussion #75](https://github.com/QwenLM/Qwen3-TTS/discussions/75),
+[HF Base discussion #9](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base/discussions/9):
+newlines, dots, dashes and underscores all reported to make "no difference"; the two
+suggested workarounds are stacked ellipses, which one reporter says *truncates the
+audio*, and runs of spaces inside quotes, unverified). What the same spike found does
+work is lexical vocalisations — `Haha,` `Ugh,` `Hmm.` were spoken every time. So the
+fix spends a word: `I'm the... other thing` → `I'm the, uh, other thing`.
+
+**The delimiting commas are load-bearing and the dashes were not.** Commas move prosody;
+hyphens and em-dashes are measured inert, so `- uh -` would be this same word with two
+characters that do nothing and might be voiced.
+
+**Only a medial ellipsis is rewritten** — one with a word character either side, and the
+surrounding whitespace is swallowed so the replacement supplies its own. A leading or
+trailing one keeps its dots: `", uh,"` dangling off the end of a line is worse than the
+nothing an ellipsis already does. Since the mark is inert, **every miss is a no-op, not a
+regression**, which is why the boundary is deliberately narrow — `Wait...!` and
+`the... "other thing"` go unrewritten too. A run of two or more dots, a `…`, or any mix
+all match; one bare dot never does, so `3.14` is safe. `\w` is unicode-aware, so
+`そう…です` counts as medial for the same reason the respelling boundary avoids `\b`.
+
+The choice is **uniform per occurrence**, from an injectable `random.Random` mirroring
+`pick_reference`. Repeat an entry to weight it. Nothing here is language-aware — `uh`/`um`
+are English, and a JP/KO deployment should replace the list outright (`えっと`, `어`). Unlike
+respelling keys, fillers are emitted and never matched, so they are not restricted to
+Latin script.
+
+Respelling runs **before** filling, so an inserted filler can never be caught by a
+caller's respelling rule; the reverse is impossible, since a key is Latin letters, spaces,
+apostrophes and hyphens and so no replacement can produce an ellipsis.
+
+**`uh` and `um` are unauditioned as a pair**, like `Anbee` and `Demarra` — both are
+ordinary English hesitations, but nobody has compared them in these voices.
+
 **Opt-in**, via `serve-http --pronunciations` — bare flag for the bundled table, or a
 path. Omitted, nothing is rewritten. Opt-in rather than default so media-worker's dubbing
 deployment does not inherit lyrebird's respellings, the same reasoning as `--characters`.
+Fillers ride the same flag rather than their own: a dubbed line's `...` is a translator's
+punctuation and inserting a filler would rewrite the script and lengthen it against the
+original's timing, so the deployment that must not get respellings must not get fillers
+either.
 
 Matching is case-insensitive and the replacement is emitted **verbatim**, so `ANBY`
 becomes `Anbee` — preserving the caller's capitalisation would be work spent on something
@@ -437,11 +483,12 @@ rewrites inside markup that is about to be deleted.
 
 Every malformed entry is **fatal** at load, like `voices.yaml` and unlike the character
 library: empty or non-string keys and values, whitespace-padded keys, case-insensitive
-collisions, unknown top-level keys, a missing file. **Non-Latin keys are rejected** rather
+collisions, unknown top-level keys, a missing file, a non-list or non-string or
+whitespace-padded `fillers` entry. **Non-Latin keys are rejected** rather
 than half-supported — the boundary is built from letter lookarounds, so a kana key would
 degenerate to a bare substring match and fire inside any longer run. An absent or empty
-`pronunciations:` mapping is *not* an error; it is how a deployment turns the table off
-without dropping the flag.
+`pronunciations:` mapping or `fillers:` list is *not* an error; either is how a
+deployment turns that half off without dropping the flag.
 
 Keys, replacements and input text are all normalized to **NFC** before matching — at load
 for keys and replacements, per-call for `apply`'s `text` argument. Accented Latin can be

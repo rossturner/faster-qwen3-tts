@@ -24,3 +24,20 @@ pronunciations:
   # blocks it. Pinned by a test, because a key added later without that boundary would
   # break it silently.
   Ridu: "Reedoo"
+
+# Spoken where a medial ellipsis was, chosen uniformly per occurrence. An ellipsis buys
+# no pause at all -- the same inertness that forces respellings above, and the one
+# upstream complaint with no maintainer answer. A lexical filler is what actually works:
+# the spike that found typography inert found `Haha,` `Ugh,` `Hmm.` spoken every time.
+#
+# The delimiting commas are not decoration. Commas move prosody; hyphens and em-dashes
+# are measured inert, so "- uh -" would be this same word with two characters that do
+# nothing and might be voiced.
+#
+# Only a medial ellipsis is rewritten, so a line that trails off at the end keeps its
+# dots and stays silent there. Repeat an entry to weight it.
+#
+# NOT AUDITIONED as a pair -- "uh" and "um" are both ordinary English hesitations, but
+# nobody has compared them in this voice. Non-English deployments should replace them
+# outright ("えっと"/"あの", "어"/"음"); nothing here is language-aware.
+fillers: ["uh", "um"]

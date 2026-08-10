@@ -381,3 +381,20 @@ def test_stream_pronunciations_run_after_stage_directions_are_stripped():
     c.post("/v1/audio/stream",
            json={"input": "*waves* Anby is here", "voice": "nicole"})
     assert mgr.calls[-1][1] == "Anbee is here"
+
+
+def test_stream_replaces_a_medial_ellipsis_with_a_filler():
+    c, mgr = _stream_client(pronouncer=Pronouncer((), ("uh",)))
+    r = c.post("/v1/audio/stream",
+               json={"input": "I'm the... other thing", "voice": "nicole"})
+    assert r.status_code == 200
+    assert mgr.calls[-1][1] == "I'm the, uh, other thing"
+
+
+def test_stripping_a_stage_direction_can_make_an_ellipsis_medial():
+    # Filling runs after stripping, so markup between the dots and the next word does not
+    # hide the ellipsis. Reversed, this would stay "I'm the... other thing".
+    c, mgr = _stream_client(pronouncer=Pronouncer((), ("uh",)))
+    c.post("/v1/audio/stream",
+           json={"input": "I'm the... *shrugs* other thing", "voice": "nicole"})
+    assert mgr.calls[-1][1] == "I'm the, uh, other thing"
